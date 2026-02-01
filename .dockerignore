@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode
+.idea
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+
+# Temporary files
+*.tmp
+*.log
+
+# Dependencies (will be downloaded in container)
+vendor/
+
+# Migration files (optional, keep if needed)
+# migrations/
+
+# OS files
+.DS_Store
+Thumbs.db
