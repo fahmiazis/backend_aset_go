@@ -1,0 +1,75 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Go build outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+build/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.prof
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+go.work.sum
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Log files
+*.log
+logs/
+log/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Air live reload
+.air.toml
+tmp/
+
+# Build cache
+.cache/
+
+# Upload directory - ignore all files but keep the folder structure
+uploads/*
+!uploads/.gitkeep
+!uploads/images/.gitkeep
+!uploads/documents/.gitkeep
+!uploads/avatars/.gitkeep
+
+# OS specific
+Thumbs.db
+.DS_Store
+
+# Debug files
+debug
+__debug_bin
