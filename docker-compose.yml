@@ -1,7 +1,4 @@
-version: '3.8'
-
 services:
-  # Go Application
   app:
     build:
       context: .
@@ -10,17 +7,19 @@ services:
     restart: unless-stopped
     ports:
       - "${PORT}:8080"
+    env_file:
+      - .env  # ← Tambahkan ini untuk load .env file
     environment:
-      # Connect ke MariaDB di host
-      DB_HOST: 172.17.0.1  # Docker bridge network IP
-      DB_PORT: 3306
+      # Override atau pastikan env vars loaded
+      DB_HOST: host.docker.internal
+      DB_PORT: ${DB_PORT}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY}
       JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY}
-      PORT: 8080
+      PORT: ${PORT}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
