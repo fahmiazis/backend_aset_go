@@ -11,6 +11,7 @@ func SetupRoutes(r *gin.Engine) {
 		// Setup all route modules
 		SetupAuthRoutes(v1)
 		SetupUserRoutes(v1)
+		SetupCabangRoutes(v1)
 	}
 
 	// Health check endpoint (no auth required)
