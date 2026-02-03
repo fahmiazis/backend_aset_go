@@ -2,24 +2,27 @@ package dto
 
 // CreateCabangRequest represents the request body for creating a cabang
 type CreateCabangRequest struct {
-	NamaCabang   string `json:"nama_cabang" binding:"required"`
-	StatusCabang string `json:"status_cabang" binding:"omitempty,oneof=active inactive"`
+	NamaCabang  string `json:"nama_cabang" binding:"required"`
+	JenisCabang string `json:"jenis_cabang" binding:"required"`
+	Status      string `json:"status" binding:"omitempty,oneof=active inactive"`
 }
 
 // UpdateCabangRequest represents the request body for updating a cabang
 type UpdateCabangRequest struct {
-	NamaCabang   string `json:"nama_cabang" binding:"omitempty"`
-	StatusCabang string `json:"status_cabang" binding:"omitempty,oneof=active inactive"`
+	NamaCabang  string `json:"nama_cabang" binding:"omitempty"`
+	JenisCabang string `json:"jenis_cabang" binding:"omitempty"`
+	Status      string `json:"status" binding:"omitempty,oneof=active inactive"`
 }
 
 // CabangResponse represents the cabang data in response
 type CabangResponse struct {
-	ID           string `json:"id"`
-	KodeCabang   string `json:"kode_cabang"`
-	NamaCabang   string `json:"nama_cabang"`
-	StatusCabang string `json:"status_cabang"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID          string `json:"id"`
+	KodeCabang  string `json:"kode_cabang"`
+	NamaCabang  string `json:"nama_cabang"`
+	JenisCabang string `json:"jenis_cabang"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 // AssignCabangRequest represents the request to assign cabangs to a user

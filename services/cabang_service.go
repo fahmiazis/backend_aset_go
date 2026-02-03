@@ -19,12 +19,13 @@ func GetAllCabangs() ([]dto.CabangResponse, error) {
 	response := make([]dto.CabangResponse, len(cabangs))
 	for i, cabang := range cabangs {
 		response[i] = dto.CabangResponse{
-			ID:           cabang.ID,
-			KodeCabang:   cabang.KodeCabang,
-			NamaCabang:   cabang.NamaCabang,
-			StatusCabang: cabang.StatusCabang,
-			CreatedAt:    cabang.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:    cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
+			ID:          cabang.ID,
+			KodeCabang:  cabang.KodeCabang,
+			NamaCabang:  cabang.NamaCabang,
+			JenisCabang: cabang.JenisCabang,
+			Status:      cabang.Status,
+			CreatedAt:   cabang.CreatedAt.Format("2006-01-02 15:04:05"),
+			UpdatedAt:   cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
 		}
 	}
 
@@ -42,12 +43,13 @@ func GetCabangByID(id string) (*dto.CabangResponse, error) {
 	}
 
 	response := &dto.CabangResponse{
-		ID:           cabang.ID,
-		KodeCabang:   cabang.KodeCabang,
-		NamaCabang:   cabang.NamaCabang,
-		StatusCabang: cabang.StatusCabang,
-		CreatedAt:    cabang.CreatedAt.Format("2006-01-02 15:04:05"),
-		UpdatedAt:    cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
+		ID:          cabang.ID,
+		KodeCabang:  cabang.KodeCabang,
+		NamaCabang:  cabang.NamaCabang,
+		JenisCabang: cabang.JenisCabang,
+		Status:      cabang.Status,
+		CreatedAt:   cabang.CreatedAt.Format("2006-01-02 15:04:05"),
+		UpdatedAt:   cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
 
 	return response, nil
@@ -64,12 +66,13 @@ func GetCabangByKode(kodeCabang string) (*dto.CabangResponse, error) {
 	}
 
 	response := &dto.CabangResponse{
-		ID:           cabang.ID,
-		KodeCabang:   cabang.KodeCabang,
-		NamaCabang:   cabang.NamaCabang,
-		StatusCabang: cabang.StatusCabang,
-		CreatedAt:    cabang.CreatedAt.Format("2006-01-02 15:04:05"),
-		UpdatedAt:    cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
+		ID:          cabang.ID,
+		KodeCabang:  cabang.KodeCabang,
+		NamaCabang:  cabang.NamaCabang,
+		JenisCabang: cabang.JenisCabang,
+		Status:      cabang.Status,
+		CreatedAt:   cabang.CreatedAt.Format("2006-01-02 15:04:05"),
+		UpdatedAt:   cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
 
 	return response, nil
@@ -78,14 +81,15 @@ func GetCabangByKode(kodeCabang string) (*dto.CabangResponse, error) {
 // CreateCabang creates a new cabang
 func CreateCabang(req dto.CreateCabangRequest) (*dto.CabangResponse, error) {
 	// Set default status if not provided
-	statusCabang := req.StatusCabang
-	if statusCabang == "" {
-		statusCabang = "active"
+	status := req.Status
+	if status == "" {
+		status = "active"
 	}
 
 	cabang := models.Cabang{
-		NamaCabang:   req.NamaCabang,
-		StatusCabang: statusCabang,
+		NamaCabang:  req.NamaCabang,
+		JenisCabang: req.JenisCabang,
+		Status:      status,
 	}
 
 	// kode_cabang will be auto-generated in BeforeCreate hook
@@ -94,12 +98,13 @@ func CreateCabang(req dto.CreateCabangRequest) (*dto.CabangResponse, error) {
 	}
 
 	response := &dto.CabangResponse{
-		ID:           cabang.ID,
-		KodeCabang:   cabang.KodeCabang,
-		NamaCabang:   cabang.NamaCabang,
-		StatusCabang: cabang.StatusCabang,
-		CreatedAt:    cabang.CreatedAt.Format("2006-01-02 15:04:05"),
-		UpdatedAt:    cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
+		ID:          cabang.ID,
+		KodeCabang:  cabang.KodeCabang,
+		NamaCabang:  cabang.NamaCabang,
+		JenisCabang: cabang.JenisCabang,
+		Status:      cabang.Status,
+		CreatedAt:   cabang.CreatedAt.Format("2006-01-02 15:04:05"),
+		UpdatedAt:   cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
 
 	return response, nil
@@ -122,8 +127,11 @@ func UpdateCabang(id string, req dto.UpdateCabangRequest) (*dto.CabangResponse, 
 	if req.NamaCabang != "" {
 		updates["nama_cabang"] = req.NamaCabang
 	}
-	if req.StatusCabang != "" {
-		updates["status_cabang"] = req.StatusCabang
+	if req.JenisCabang != "" {
+		updates["jenis_cabang"] = req.JenisCabang
+	}
+	if req.Status != "" {
+		updates["status"] = req.Status
 	}
 
 	// Update cabang
@@ -204,12 +212,13 @@ func GetUserCabangs(userID string) ([]dto.CabangResponse, error) {
 	response := make([]dto.CabangResponse, len(cabangs))
 	for i, cabang := range cabangs {
 		response[i] = dto.CabangResponse{
-			ID:           cabang.ID,
-			KodeCabang:   cabang.KodeCabang,
-			NamaCabang:   cabang.NamaCabang,
-			StatusCabang: cabang.StatusCabang,
-			CreatedAt:    cabang.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:    cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
+			ID:          cabang.ID,
+			KodeCabang:  cabang.KodeCabang,
+			NamaCabang:  cabang.NamaCabang,
+			JenisCabang: cabang.JenisCabang,
+			Status:      cabang.Status,
+			CreatedAt:   cabang.CreatedAt.Format("2006-01-02 15:04:05"),
+			UpdatedAt:   cabang.UpdatedAt.Format("2006-01-02 15:04:05"),
 		}
 	}
 

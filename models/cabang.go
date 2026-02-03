@@ -1,7 +1,6 @@
 package models
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,13 +8,14 @@ import (
 )
 
 type Cabang struct {
-	ID           string         `gorm:"type:char(36);primaryKey" json:"id"`
-	KodeCabang   string         `gorm:"type:varchar(10);uniqueIndex;not null" json:"kode_cabang"`
-	NamaCabang   string         `gorm:"type:varchar(255);not null" json:"nama_cabang"`
-	StatusCabang string         `gorm:"type:enum('active','inactive');default:'active'" json:"status_cabang"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
+	ID          string         `gorm:"type:char(36);primaryKey" json:"id"`
+	KodeCabang  string         `gorm:"type:varchar(10);uniqueIndex;not null" json:"kode_cabang"`
+	NamaCabang  string         `gorm:"type:varchar(255);not null" json:"nama_cabang"`
+	JenisCabang string         `gorm:"type:varchar(50);not null" json:"jenis_cabang"`
+	Status      string         `gorm:"type:enum('active','inactive');default:'active'" json:"status"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
 
 	// Relations
 	UserCabangs []UserCabang `gorm:"foreignKey:CabangID" json:"user_cabangs,omitempty"`
@@ -29,22 +29,13 @@ func (c *Cabang) BeforeCreate(tx *gorm.DB) error {
 
 	// Auto-generate kode_cabang if not provided
 	if c.KodeCabang == "" {
-		var lastCabang Cabang
-		err := tx.Unscoped().Order("kode_cabang DESC").First(&lastCabang).Error
+		var kodeCabang string
 
-		if err != nil {
-			// First cabang, start with C00001
-			c.KodeCabang = "C00001"
-		} else {
-			// Extract number from last kode_cabang and increment
-			var lastNumber int
-			_, err := fmt.Sscanf(lastCabang.KodeCabang, "C%05d", &lastNumber)
-			if err != nil {
-				c.KodeCabang = "C00001"
-			} else {
-				c.KodeCabang = fmt.Sprintf("C%05d", lastNumber+1)
-			}
-		}
+		// Single atomic query: ambil max number dan increment dalam satu go
+		// COALESCE handles the case when table is empty (returns 0)
+		tx.Raw(`SELECT CONCAT('C', LPAD(COALESCE(MAX(CAST(SUBSTRING(kode_cabang, 2) AS UNSIGNED)), 0) + 1, 5, '0')) FROM cabangs`).Scan(&kodeCabang)
+
+		c.KodeCabang = kodeCabang
 	}
 
 	return nil
