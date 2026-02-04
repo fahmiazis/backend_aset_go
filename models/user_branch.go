@@ -7,19 +7,19 @@ import (
 	"gorm.io/gorm"
 )
 
-type UserCabang struct {
+type UserBranch struct {
 	ID        string    `gorm:"type:char(36);primaryKey" json:"id"`
-	UserID    string    `gorm:"type:char(36);not null;index:idx_user_cabang" json:"user_id"`
-	CabangID  string    `gorm:"type:char(36);not null;index:idx_user_cabang" json:"cabang_id"`
+	UserID    string    `gorm:"type:char(36);not null;index:idx_user_branch" json:"user_id"`
+	BranchID  string    `gorm:"type:char(36);not null;index:idx_user_branch" json:"branch_id"`
 	CreatedAt time.Time `json:"created_at"`
 
 	// Relations
 	User   User   `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"user,omitempty"`
-	Cabang Cabang `gorm:"foreignKey:CabangID;constraint:OnDelete:CASCADE" json:"cabang,omitempty"`
+	Branch Branch `gorm:"foreignKey:BranchID;constraint:OnDelete:CASCADE" json:"branch,omitempty"`
 }
 
 // BeforeCreate will set a UUID
-func (uc *UserCabang) BeforeCreate(tx *gorm.DB) error {
+func (uc *UserBranch) BeforeCreate(tx *gorm.DB) error {
 	if uc.ID == "" {
 		uc.ID = uuid.New().String()
 	}
@@ -27,6 +27,6 @@ func (uc *UserCabang) BeforeCreate(tx *gorm.DB) error {
 }
 
 // TableName overrides the table name
-func (UserCabang) TableName() string {
-	return "user_cabangs"
+func (UserBranch) TableName() string {
+	return "user_branchs"
 }

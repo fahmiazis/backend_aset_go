@@ -1,17 +1,17 @@
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE IF NOT EXISTS cabangs (
+CREATE TABLE IF NOT EXISTS branchs (
     id CHAR(36) PRIMARY KEY,
-    kode_cabang VARCHAR(10) NOT NULL UNIQUE,
-    nama_cabang VARCHAR(255) NOT NULL,
-    jenis_cabang VARCHAR(50) NOT NULL,
+    branch_code VARCHAR(10) NOT NULL UNIQUE,
+    branch_name VARCHAR(255) NOT NULL,
+    branch_type VARCHAR(50) NOT NULL,
     status ENUM('active', 'inactive') DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP NULL,
     
-    INDEX idx_kode_cabang (kode_cabang),
-    INDEX idx_jenis_cabang (jenis_cabang),
+    INDEX idx_branch_code (branch_code),
+    INDEX idx_branch_type (branch_type),
     INDEX idx_status (status),
     INDEX idx_deleted_at (deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -19,5 +19,5 @@ CREATE TABLE IF NOT EXISTS cabangs (
 
 -- +goose Down
 -- +goose StatementBegin
-DROP TABLE IF EXISTS cabangs;
+DROP TABLE IF EXISTS branch;
 -- +goose StatementEnd
