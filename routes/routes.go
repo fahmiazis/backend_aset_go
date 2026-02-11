@@ -14,6 +14,9 @@ func SetupRoutes(r *gin.Engine) {
 		SetupBranchRoutes(v1)
 		SetupMenuRoutes(v1)
 		SetupRoleRoutes(v1)
+		SetupApprovalRoutes(v1)
+		SetupHomebaseRoutes(v1)
+		SetupCustomApprovalRoutes(v1)
 	}
 
 	// Health check endpoint (no auth required)

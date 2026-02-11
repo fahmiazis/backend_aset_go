@@ -14,8 +14,8 @@ type UserRole struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// Relations
-	User User `gorm:"foreignKey:UserID;references:ID" json:"-"`
-	Role Role `gorm:"foreignKey:RoleID;references:ID" json:"role"`
+	User User  `gorm:"foreignKey:UserID;references:ID" json:"-"`
+	Role *Role `gorm:"foreignKey:RoleID;references:ID" json:"role"`
 }
 
 func (ur *UserRole) BeforeCreate(tx *gorm.DB) error {
