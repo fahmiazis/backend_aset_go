@@ -66,6 +66,13 @@ func CreateUser(c *gin.Context) {
 		services.UpdateUser(user.ID, updateReq)
 	}
 
+	if len(req.RoleIDs) > 0 {
+		assignReq := dto.AssignRoleRequest{
+			RoleIDs: req.RoleIDs,
+		}
+		services.AssignRoles(user.ID, assignReq)
+	}
+
 	utils.SuccessResponse(c, http.StatusCreated, "User created successfully", gin.H{
 		"id":       user.ID,
 		"username": user.Username,

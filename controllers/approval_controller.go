@@ -140,6 +140,25 @@ func UpdateApprovalFlowStep(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Approval flow step updated successfully", step)
 }
 
+// UpdateBulkStepOrderFlowStep - PUT /approval-flow-steps/:id
+func UpdateBulkStepOrderFlowStep(c *gin.Context) {
+	id := c.Param("id")
+
+	var req dto.UpdateBulkStepOrderFlowStep
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	err := services.UpdateBulkStepOrderFlowStep(id, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Approval flow step order updated successfully", nil)
+}
+
 // DeleteApprovalFlowStep - DELETE /approval-flow-steps/:id
 func DeleteApprovalFlowStep(c *gin.Context) {
 	id := c.Param("id")

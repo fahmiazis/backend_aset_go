@@ -324,6 +324,40 @@ func UpdateApprovalFlowStep(id string, req dto.UpdateApprovalFlowStepRequest) (*
 	return GetApprovalFlowStepByID(id)
 }
 
+func UpdateBulkStepOrderFlowStep(flowID string, req dto.UpdateBulkStepOrderFlowStep) error {
+	// Check if user exists
+	var approvalStep models.ApprovalFlowStep
+	if err := config.DB.First(&approvalStep, "flow_id = ?", flowID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return errors.New("approval flow step not found")
+		}
+		return err
+	}
+
+	// Assign new roles
+	for i, listID := range req.ListIDs {
+		var approvalStepId models.ApprovalFlowStep
+		err := config.DB.
+			Where("id = ?", listID).
+			First(&approvalStepId).Error
+		if err == nil {
+			updateFields := map[string]any{
+				"step_order": i + 1,
+			}
+
+			if err := config.DB.
+				Model(&approvalStepId).
+				Updates(updateFields).Error; err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func DeleteApprovalFlowStep(id string) error {
 	var step models.ApprovalFlowStep
 	if err := config.DB.First(&step, "id = ?", id).Error; err != nil {

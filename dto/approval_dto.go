@@ -106,6 +106,10 @@ type UpdateApprovalFlowStepRequest struct {
 	Conditions   *string `json:"conditions"`
 }
 
+type UpdateBulkStepOrderFlowStep struct {
+	ListIDs []string `json:"list_ids" binding:"required,min=1"`
+}
+
 type ApprovalFlowStepResponse struct {
 	ID           string    `json:"id"`
 	FlowID       string    `json:"flow_id"`

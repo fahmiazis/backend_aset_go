@@ -3,13 +3,14 @@ package dto
 import "time"
 
 type CreateUserRequest struct {
-	Username  string `json:"username" binding:"required,min=3,max=50"`
-	Fullname  string `json:"fullname" binding:"required,min=3,max=100"`
-	Email     string `json:"email" binding:"required,email"`
-	Password  string `json:"password" binding:"required,min=6"`
-	NIK       string `json:"nik"`
-	MPNNumber string `json:"mpn_number"`
-	Status    string `json:"status" binding:"omitempty,oneof=active inactive"`
+	Username  string   `json:"username" binding:"required,min=3,max=50"`
+	Fullname  string   `json:"fullname" binding:"required,min=3,max=100"`
+	Email     string   `json:"email" binding:"required,email"`
+	Password  string   `json:"password" binding:"required,min=6"`
+	NIK       string   `json:"nik"`
+	MPNNumber string   `json:"mpn_number"`
+	Status    string   `json:"status" binding:"omitempty,oneof=active inactive"`
+	RoleIDs   []string `json:"role_ids" binding:"required,min=1"`
 }
 
 type UpdateUserRequest struct {

@@ -35,6 +35,7 @@ func SetupApprovalRoutes(rg *gin.RouterGroup) {
 		steps.POST("", controllers.CreateApprovalFlowStep)
 		steps.PUT("/:id", controllers.UpdateApprovalFlowStep)
 		steps.DELETE("/:id", controllers.DeleteApprovalFlowStep)
+		steps.PUT("/step-order-change/:id", controllers.UpdateBulkStepOrderFlowStep)
 	}
 
 	// ========================================================================
