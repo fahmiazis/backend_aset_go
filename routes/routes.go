@@ -17,6 +17,15 @@ func SetupRoutes(r *gin.Engine) {
 		SetupApprovalRoutes(v1)
 		SetupHomebaseRoutes(v1)
 		SetupCustomApprovalRoutes(v1)
+		SetupMutationRoutes(v1)
+		SetupProcurementRoutes(v1)
+		SetupStockOpnameRoutes(v1)
+		SetupTransactionHeaderRoutes(v1)
+		SetupAssetCategoryRoutes(v1)
+		SetupAssetHistoryRoutes(v1)
+		SetupAssetMasterRoutes(v1)
+		SetupDepreciationRoutes(v1)
+		SetupDisposalRoutes(v1)
 	}
 
 	// Health check endpoint (no auth required)
