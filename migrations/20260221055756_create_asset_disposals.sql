@@ -1,0 +1,32 @@
+-- +goose Up
+-- +goose StatementBegin
+CREATE TABLE asset_disposals (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    document_number VARCHAR(100) NOT NULL UNIQUE,
+    transaction_date DATE NOT NULL,
+    asset_id BIGINT UNSIGNED NOT NULL,
+    asset_number VARCHAR(100) NOT NULL,
+    asset_name VARCHAR(255) NOT NULL,
+    book_value_at_disposal DECIMAL(18,2) NOT NULL DEFAULT 0,
+    disposal_value DECIMAL(18,2) NOT NULL DEFAULT 0,
+    disposal_reason TEXT,
+    disposal_method VARCHAR(50) COMMENT 'SALE, SCRAP, DONATE, WRITE_OFF',
+    notes TEXT,
+    status VARCHAR(50) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT, APPROVED, REJECTED',
+    created_by VARCHAR(100),
+    approved_by VARCHAR(100),
+    approved_at TIMESTAMP NULL DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_asset_disp_asset_id (asset_id),
+    KEY idx_asset_disp_status (status),
+    KEY idx_asset_disp_date (transaction_date),
+    KEY idx_asset_disp_method (disposal_method),
+    CONSTRAINT fk_asset_disp_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Asset disposal/retirement transactions';
+-- +goose StatementEnd
+
+-- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS asset_disposals;
+-- +goose StatementEnd
