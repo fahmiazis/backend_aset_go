@@ -109,15 +109,15 @@ docker-clean:
 # Docker migration commands
 docker-migrate-up:
 	@echo "$(GREEN)Running migrations in Docker...$(NC)"
-	$(DOCKER_COMPOSE) exec app sh -c "goose -dir migrations mysql \"$$DB_USER:$$DB_PASSWORD@tcp($$DB_HOST:$$DB_PORT)/$$DB_NAME?parseTime=true\" up"
+	$(DOCKER_COMPOSE) exec app sh -c "goose -dir migrations mysql "$$DB_USER:$$DB_PASSWORD@tcp($$DB_HOST:$$DB_PORT)/$$DB_NAME?parseTime=true" up"
 
 docker-migrate-down:
 	@echo "$(YELLOW)Rolling back migration in Docker...$(NC)"
-	$(DOCKER_COMPOSE) exec app sh -c "goose -dir migrations mysql \"$$DB_USER:$$DB_PASSWORD@tcp($$DB_HOST:$$DB_PORT)/$$DB_NAME?parseTime=true\" down"
+	$(DOCKER_COMPOSE) exec app sh -c "goose -dir migrations mysql "$$DB_USER:$$DB_PASSWORD@tcp($$DB_HOST:$$DB_PORT)/$$DB_NAME?parseTime=true" down"
 
 docker-migrate-status:
 	@echo "$(GREEN)Migration status in Docker:$(NC)"
-	$(DOCKER_COMPOSE) exec app sh -c "goose -dir migrations mysql \"$$DB_USER:$$DB_PASSWORD@tcp($$DB_HOST:$$DB_PORT)/$$DB_NAME?parseTime=true\" status"
+	$(DOCKER_COMPOSE) exec app sh -c "goose -dir migrations mysql "$$DB_USER:$$DB_PASSWORD@tcp($$DB_HOST:$$DB_PORT)/$$DB_NAME?parseTime=true" status"
 
 # Development workflow
 dev:
