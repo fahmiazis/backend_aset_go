@@ -33,7 +33,7 @@ func (c *Branch) BeforeCreate(tx *gorm.DB) error {
 
 		// Single atomic query: ambil max number dan increment dalam satu go
 		// COALESCE handles the case when table is empty (returns 0)
-		tx.Raw(`SELECT CONCAT('C', LPAD(COALESCE(MAX(CAST(SUBSTRING(branch_code, 2) AS UNSIGNED)), 0) + 1, 5, '0')) FROM branchs`).Scan(&BranchCode)
+		tx.Raw(`SELECT CONCAT('BC', LPAD(COALESCE(MAX(CAST(SUBSTRING(branch_code, 3) AS UNSIGNED)), 0) + 1, 6, '0')) FROM branchs`).Scan(&BranchCode)
 
 		c.BranchCode = BranchCode
 	}

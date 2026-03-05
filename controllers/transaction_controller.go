@@ -11,7 +11,7 @@ import (
 
 // GetTransactionByNumber - GET /transactions/:number
 func GetTransactionByNumber(c *gin.Context) {
-	transactionNumber := c.Param("number")
+	transactionNumber := c.Query("number")
 
 	transaction, err := services.GetTransactionByNumber(transactionNumber)
 	if err != nil {

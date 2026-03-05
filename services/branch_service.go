@@ -80,19 +80,33 @@ func GetBranchByKode(BranchCode string) (*dto.BranchResponse, error) {
 
 // CreateBranch creates a new branch
 func CreateBranch(req dto.CreateBranchRequest) (*dto.BranchResponse, error) {
-	// Set default status if not provided
 	status := req.Status
 	if status == "" {
 		status = "active"
 	}
 
+	// Cek dulu apakah branch dengan name + type + status active sudah ada
+	var existingBranch models.Branch
+	result := config.DB.Where("branch_name = ? AND branch_type = ? AND status = ?",
+		req.BranchName, req.BranchType, "active").First(&existingBranch)
+
+	if result.Error == nil {
+		// Data ditemukan → tolak
+		return nil, errors.New("branch telah terdaftar")
+	}
+
+	// Kalau errornya bukan "record not found", berarti ada error DB beneran
+	if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return nil, result.Error
+	}
+
+	// Aman → baru create
 	branch := models.Branch{
 		BranchName: req.BranchName,
 		BranchType: req.BranchType,
 		Status:     status,
 	}
 
-	// branch_code will be auto-generated in BeforeCreate hook
 	if err := config.DB.Create(&branch).Error; err != nil {
 		return nil, err
 	}

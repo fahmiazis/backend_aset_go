@@ -18,6 +18,6 @@ func SetupTransactionHeaderRoutes(rg *gin.RouterGroup) {
 		routes.GET("/my", controllers.GetMyTransactions)
 
 		// Get specific transaction by number
-		routes.GET("/:number", controllers.GetTransactionByNumber)
+		routes.GET("/detail", controllers.GetTransactionByNumber)
 	}
 }
