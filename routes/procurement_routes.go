@@ -16,8 +16,8 @@ func SetupProcurementRoutes(rg *gin.RouterGroup) {
 			controllers.CreateProcurement)
 
 		procurement.GET("", controllers.GetAllProcurements)
-		procurement.GET("/:number", controllers.GetProcurementByNumber)
-		procurement.PUT("/:number", controllers.UpdateProcurement)
-		procurement.DELETE("/:number", controllers.DeleteProcurement)
+		procurement.GET("/detail/:number", controllers.GetProcurementByNumber)
+		procurement.PUT("/", controllers.UpdateProcurement)
+		procurement.DELETE("/", controllers.DeleteProcurement)
 	}
 }

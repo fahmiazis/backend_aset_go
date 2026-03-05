@@ -28,7 +28,7 @@ func CreateProcurement(c *gin.Context) {
 }
 
 func GetProcurementByNumber(c *gin.Context) {
-	transactionNumber := c.Param("number")
+	transactionNumber := c.Query("number")
 
 	procurement, err := services.GetProcurementByTransactionNumber(transactionNumber)
 	if err != nil {
@@ -72,7 +72,7 @@ func GetAllProcurements(c *gin.Context) {
 
 func UpdateProcurement(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("number")
+	transactionNumber := c.Query("number")
 
 	var req dto.CreateProcurementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -91,7 +91,7 @@ func UpdateProcurement(c *gin.Context) {
 
 func DeleteProcurement(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("number")
+	transactionNumber := c.Query("number")
 
 	if err := services.DeleteProcurement(transactionNumber, userID); err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
