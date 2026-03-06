@@ -130,7 +130,8 @@ dev:
 
 # Production deployment
 deploy:
-	@echo "$(GREEN)Deploying to production...[0m"
+	@echo "$(GREEN)Deploying to production...$(NC)"
+	docker rm -f backend-go-app || true
 	$(DOCKER_COMPOSE) down
 	$(DOCKER_COMPOSE) up -d
 	@sleep 15
