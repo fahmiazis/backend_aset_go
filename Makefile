@@ -130,9 +130,8 @@ dev:
 
 # Production deployment
 deploy:
-	@echo "$(GREEN)Deploying to production...$(NC)"
+	@echo "$(GREEN)Deploying to production...[0m"
 	$(DOCKER_COMPOSE) down
-	$(DOCKER_COMPOSE) build --no-cache
 	$(DOCKER_COMPOSE) up -d
 	@sleep 15
 	@$(MAKE) docker-migrate-up
