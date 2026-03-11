@@ -16,7 +16,11 @@ import (
 
 func SubmitProcurement(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	var req dto.SubmitProcurementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -41,7 +45,11 @@ func SubmitProcurement(c *gin.Context) {
 func VerifyProcurement(c *gin.Context) {
 	userID := c.GetString("user_id")
 	branchCode := c.GetString("branch_code") // dari JWT middleware, branch aktif PIC Asset
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	var req dto.VerifyProcurementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -65,7 +73,11 @@ func VerifyProcurement(c *gin.Context) {
 
 func InitiateProcurementApproval(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	var req dto.InitiateApprovalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -88,7 +100,11 @@ func InitiateProcurementApproval(c *gin.Context) {
 
 func CompleteProcurementApproval(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	result, err := services.CompleteProcurementApproval(userID, transactionNumber)
 	if err != nil {
@@ -106,7 +122,11 @@ func CompleteProcurementApproval(c *gin.Context) {
 
 func ProcessProcurementBudget(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	var req dto.ProcessBudgetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -130,7 +150,11 @@ func ProcessProcurementBudget(c *gin.Context) {
 
 func ExecuteProcurementAsset(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	var req dto.ExecuteAssetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -155,7 +179,11 @@ func ExecuteProcurementAsset(c *gin.Context) {
 func CreateAssetGR(c *gin.Context) {
 	userID := c.GetString("user_id")
 	userBranchCode := c.GetString("branch_code") // dari JWT middleware
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	var req dto.CreateGRRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -178,7 +206,11 @@ func CreateAssetGR(c *gin.Context) {
 // ============================================================
 
 func GetProcurementGRStatus(c *gin.Context) {
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	result, err := services.GetProcurementDetailWithStage(transactionNumber)
 	if err != nil {
@@ -196,7 +228,11 @@ func GetProcurementGRStatus(c *gin.Context) {
 
 func RejectProcurement(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	var req dto.RejectProcurementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -220,7 +256,11 @@ func RejectProcurement(c *gin.Context) {
 
 func ReviseProcurement(c *gin.Context) {
 	userID := c.GetString("user_id")
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	var req dto.ReviseProcurementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -243,7 +283,11 @@ func ReviseProcurement(c *gin.Context) {
 // ============================================================
 
 func GetProcurementDetailWithStage(c *gin.Context) {
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	result, err := services.GetProcurementDetailWithStage(transactionNumber)
 	if err != nil {
@@ -260,7 +304,11 @@ func GetProcurementDetailWithStage(c *gin.Context) {
 // ============================================================
 
 func GetProcurementApprovalStatus(c *gin.Context) {
-	transactionNumber := c.Param("transaction_number")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
 
 	result, err := services.GetTransactionApprovalStatus(transactionNumber, "PROCUREMENT")
 	if err != nil {
