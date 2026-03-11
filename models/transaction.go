@@ -2,12 +2,15 @@ package models
 
 import "time"
 
+// UPDATE: tambah CurrentStage dan IONumber
 type Transaction struct {
 	ID                uint       `gorm:"primaryKey" json:"id"`
 	TransactionNumber string     `gorm:"size:100;uniqueIndex;not null" json:"transaction_number"`
 	TransactionType   string     `gorm:"size:50;not null;index" json:"transaction_type"`
 	TransactionDate   time.Time  `gorm:"type:date;not null;index" json:"transaction_date"`
 	Status            string     `gorm:"size:50;not null;default:DRAFT;index" json:"status"`
+	CurrentStage      string     `gorm:"size:50;not null;default:DRAFT;index" json:"current_stage"` // ADD
+	IONumber          *string    `gorm:"size:50" json:"io_number"`                                  // ADD
 	Notes             *string    `gorm:"type:text" json:"notes"`
 	CreatedBy         string     `gorm:"size:100" json:"created_by"`
 	ApprovedBy        *string    `gorm:"size:100" json:"approved_by"`
@@ -26,6 +29,9 @@ type Transaction struct {
 	AssetMutations    []AssetMutation    `gorm:"foreignKey:TransactionID" json:"asset_mutations,omitempty"`
 	AssetDisposals    []AssetDisposal    `gorm:"foreignKey:TransactionID" json:"asset_disposals,omitempty"`
 	AssetStockOpnames []AssetStockOpname `gorm:"foreignKey:TransactionID" json:"asset_stock_opnames,omitempty"`
+
+	// Relations to Stage History
+	Stages []TransactionStage `gorm:"foreignKey:TransactionID" json:"stages,omitempty"` // ADD
 }
 
 func (Transaction) TableName() string { return "transactions" }
