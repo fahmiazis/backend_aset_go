@@ -15,7 +15,7 @@ func SetupProcurementFlowRoutes(rg *gin.RouterGroup) {
 		// Detail with Stage + Approval Status + GR Status
 		// GET /transactions/procurement/detail?transaction_number=xxx
 		// ============================================================
-		procurement.GET("/detail", controllers.GetProcurementDetailWithStage)
+		procurement.GET("/detail-stage", controllers.GetProcurementDetailWithStage)
 		procurement.GET("/approval-status", controllers.GetProcurementApprovalStatus)
 		procurement.GET("/gr", controllers.GetProcurementGRStatus)
 
