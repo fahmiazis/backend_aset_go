@@ -168,7 +168,7 @@ func VerifyProcurement(userID string, branchCode string, transactionNumber strin
 // STAGE 3: APPROVAL
 // APPROVAL → PROSES_BUDGET
 // Trigger TransactionApproval system
-// Dipanggil setelah semua approval step selesai (by webhook/checker)
+// Flow otomatis dicari berdasarkan flow_code PROCUREMENT_APPROVAL
 // ============================================================
 
 func InitiateProcurementApproval(userID string, transactionNumber string, req dto.InitiateApprovalRequest) error {
@@ -181,9 +181,19 @@ func InitiateProcurementApproval(userID string, transactionNumber string, req dt
 		return fmt.Errorf("transaction is not in %s stage", models.StageApproval)
 	}
 
-	// Trigger approval system
+	// Auto-lookup flow by code PROCUREMENT_APPROVAL
+	// Tidak perlu input flow_id manual dari user
+	flow, err := GetApprovalFlowByCode("PROCUREMENT_APPROVAL")
+	if err != nil {
+		return fmt.Errorf("approval flow PROCUREMENT_APPROVAL not found, please configure it first")
+	}
+
+	if !flow.IsActive {
+		return errors.New("approval flow PROCUREMENT_APPROVAL is inactive")
+	}
+
 	approvalReq := dto.CreateTransactionApprovalRequest{
-		FlowID:            req.FlowID,
+		FlowID:            flow.ID,
 		TransactionNumber: transactionNumber,
 		TransactionType:   TxProcurement,
 		Metadata:          req.Metadata,

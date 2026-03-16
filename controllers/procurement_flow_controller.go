@@ -11,7 +11,7 @@ import (
 
 // ============================================================
 // SUBMIT
-// POST /api/transactions/procurements/:transaction_number/submit
+// POST /api/transactions/procurement/submit?transaction_number=xxx
 // ============================================================
 
 func SubmitProcurement(c *gin.Context) {
@@ -39,12 +39,12 @@ func SubmitProcurement(c *gin.Context) {
 
 // ============================================================
 // VERIFIKASI ASET
-// POST /api/transactions/procurements/:transaction_number/verify
+// POST /api/transactions/procurement/verify?transaction_number=xxx
 // ============================================================
 
 func VerifyProcurement(c *gin.Context) {
 	userID := c.GetString("user_id")
-	branchCode := c.GetString("branch_code") // dari JWT middleware, branch aktif PIC Asset
+	branchCode := c.GetString("branch_code")
 	transactionNumber := c.Query("transaction_number")
 	if transactionNumber == "" {
 		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
@@ -68,7 +68,8 @@ func VerifyProcurement(c *gin.Context) {
 
 // ============================================================
 // INITIATE APPROVAL
-// POST /api/transactions/procurements/:transaction_number/initiate-approval
+// POST /api/transactions/procurement/initiate-approval?transaction_number=xxx
+// flow_id tidak perlu diisi — auto-lookup by PROCUREMENT_APPROVAL
 // ============================================================
 
 func InitiateProcurementApproval(c *gin.Context) {
@@ -79,11 +80,9 @@ func InitiateProcurementApproval(c *gin.Context) {
 		return
 	}
 
+	// Body optional — hanya notes & metadata
 	var req dto.InitiateApprovalRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.ValidationErrorResponse(c, err)
-		return
-	}
+	_ = c.ShouldBindJSON(&req)
 
 	if err := services.InitiateProcurementApproval(userID, transactionNumber, req); err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
@@ -94,8 +93,8 @@ func InitiateProcurementApproval(c *gin.Context) {
 }
 
 // ============================================================
-// COMPLETE APPROVAL (dipanggil setelah semua step approved)
-// POST /api/transactions/procurements/:transaction_number/complete-approval
+// COMPLETE APPROVAL
+// POST /api/transactions/procurement/complete-approval?transaction_number=xxx
 // ============================================================
 
 func CompleteProcurementApproval(c *gin.Context) {
@@ -117,7 +116,7 @@ func CompleteProcurementApproval(c *gin.Context) {
 
 // ============================================================
 // PROSES BUDGET
-// POST /api/transactions/procurements/:transaction_number/process-budget
+// POST /api/transactions/procurement/process-budget?transaction_number=xxx
 // ============================================================
 
 func ProcessProcurementBudget(c *gin.Context) {
@@ -145,7 +144,7 @@ func ProcessProcurementBudget(c *gin.Context) {
 
 // ============================================================
 // EKSEKUSI ASET
-// POST /api/transactions/procurements/:transaction_number/execute
+// POST /api/transactions/procurement/execute?transaction_number=xxx
 // ============================================================
 
 func ExecuteProcurementAsset(c *gin.Context) {
@@ -173,12 +172,12 @@ func ExecuteProcurementAsset(c *gin.Context) {
 
 // ============================================================
 // GOOD RECEIPT
-// POST /api/transactions/procurements/:transaction_number/gr
+// POST /api/transactions/procurement/gr?transaction_number=xxx
 // ============================================================
 
 func CreateAssetGR(c *gin.Context) {
 	userID := c.GetString("user_id")
-	userBranchCode := c.GetString("branch_code") // dari JWT middleware
+	userBranchCode := c.GetString("branch_code")
 	transactionNumber := c.Query("transaction_number")
 	if transactionNumber == "" {
 		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
@@ -201,8 +200,8 @@ func CreateAssetGR(c *gin.Context) {
 }
 
 // ============================================================
-// GET GR STATUS per transaksi
-// GET /api/transactions/procurements/:transaction_number/gr
+// GET GR STATUS
+// GET /api/transactions/procurement/gr?transaction_number=xxx
 // ============================================================
 
 func GetProcurementGRStatus(c *gin.Context) {
@@ -223,7 +222,7 @@ func GetProcurementGRStatus(c *gin.Context) {
 
 // ============================================================
 // REJECT
-// POST /api/transactions/procurements/:transaction_number/reject
+// POST /api/transactions/procurement/reject?transaction_number=xxx
 // ============================================================
 
 func RejectProcurement(c *gin.Context) {
@@ -251,7 +250,7 @@ func RejectProcurement(c *gin.Context) {
 
 // ============================================================
 // REVISI
-// PUT /api/transactions/procurements/:transaction_number/revise
+// PUT /api/transactions/procurement/revise?transaction_number=xxx
 // ============================================================
 
 func ReviseProcurement(c *gin.Context) {
@@ -279,7 +278,7 @@ func ReviseProcurement(c *gin.Context) {
 
 // ============================================================
 // GET DETAIL WITH STAGE
-// GET /api/transactions/procurements/:transaction_number/detail
+// GET /api/transactions/procurement/detail?transaction_number=xxx
 // ============================================================
 
 func GetProcurementDetailWithStage(c *gin.Context) {
@@ -300,7 +299,7 @@ func GetProcurementDetailWithStage(c *gin.Context) {
 
 // ============================================================
 // GET APPROVAL STATUS
-// GET /api/transactions/procurements/:transaction_number/approval-status
+// GET /api/transactions/procurement/approval-status?transaction_number=xxx
 // ============================================================
 
 func GetProcurementApprovalStatus(c *gin.Context) {

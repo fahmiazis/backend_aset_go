@@ -64,7 +64,7 @@ type TransactionItemVerificationResponse struct {
 // ============================================================
 
 type InitiateApprovalRequest struct {
-	FlowID   string  `json:"flow_id" binding:"required"`
+	// flow_id tidak perlu diisi — auto-lookup by PROCUREMENT_APPROVAL flow_code
 	Notes    *string `json:"notes"`
 	Metadata *string `json:"metadata"`
 }
