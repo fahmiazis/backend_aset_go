@@ -11,6 +11,20 @@ import (
 	"gorm.io/gorm"
 )
 
+// validateBranchExists cek apakah branch_code terdaftar di tabel branches
+func validateBranchExists(branchCode string) error {
+	var count int64
+	if err := config.DB.Model(&models.Branch{}).
+		Where("branch_code = ?", branchCode).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("branch not found: %s", branchCode)
+	}
+	return nil
+}
+
 func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.ProcurementResponse, error) {
 	transactionNumber, err := GenerateTransactionNumber(userID, TxProcurement)
 	if err != nil {
@@ -27,6 +41,20 @@ func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.Pr
 		return nil, err
 	}
 
+	// Validasi semua branch code sebelum mulai transaksi DB
+	for _, item := range req.Items {
+		if item.BranchCode != nil && *item.BranchCode != "" {
+			if err := validateBranchExists(*item.BranchCode); err != nil {
+				return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+			}
+		}
+		for _, detail := range item.Details {
+			if err := validateBranchExists(detail.BranchCode); err != nil {
+				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
+			}
+		}
+	}
+
 	tx := config.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -38,7 +66,7 @@ func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.Pr
 		TransactionNumber: transactionNumber,
 		TransactionType:   TxProcurement,
 		TransactionDate:   transactionDate,
-		Status:            models.TransactionStatusDraft, // FIX: pakai models konstanta
+		Status:            models.TransactionStatusDraft,
 		Notes:             req.Notes,
 		CreatedBy:         userID,
 	}
@@ -50,7 +78,6 @@ func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.Pr
 
 	for _, item := range req.Items {
 		var category models.AssetCategory
-		// FIX: item.CategoryID sudah uint, langsung pass tanpa "id = ?"
 		if err := tx.First(&category, item.CategoryID).Error; err != nil {
 			tx.Rollback()
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -213,6 +240,20 @@ func UpdateProcurement(transactionNumber string, userID string, req dto.CreatePr
 	homebase, err := GetUserActiveHomebase(userID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validasi semua branch code sebelum mulai transaksi DB
+	for _, item := range req.Items {
+		if item.BranchCode != nil && *item.BranchCode != "" {
+			if err := validateBranchExists(*item.BranchCode); err != nil {
+				return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+			}
+		}
+		for _, detail := range item.Details {
+			if err := validateBranchExists(detail.BranchCode); err != nil {
+				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
+			}
+		}
 	}
 
 	tx := config.DB.Begin()

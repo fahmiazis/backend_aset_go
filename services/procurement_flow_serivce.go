@@ -622,6 +622,20 @@ func ReviseProcurement(userID string, transactionNumber string, req dto.RevisePr
 		return nil, err
 	}
 
+	// Validasi semua branch code sebelum mulai transaksi DB
+	for _, item := range req.Items {
+		if item.BranchCode != nil && *item.BranchCode != "" {
+			if err := validateBranchExists(*item.BranchCode); err != nil {
+				return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+			}
+		}
+		for _, detail := range item.Details {
+			if err := validateBranchExists(detail.BranchCode); err != nil {
+				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
+			}
+		}
+	}
+
 	tx := config.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
