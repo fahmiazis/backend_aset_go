@@ -623,10 +623,17 @@ func ReviseProcurement(userID string, transactionNumber string, req dto.RevisePr
 	}
 
 	// Validasi semua branch code sebelum mulai transaksi DB
+	isHO := homebase.Branch.BranchType == "HO"
 	for _, item := range req.Items {
 		if item.BranchCode != nil && *item.BranchCode != "" {
-			if err := validateBranchExists(*item.BranchCode); err != nil {
-				return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+			if !isHO {
+				if *item.BranchCode != homebase.Branch.BranchCode {
+					return nil, fmt.Errorf("item '%s': branch_code must match your homebase (%s)", item.ItemName, homebase.Branch.BranchCode)
+				}
+			} else {
+				if err := validateBranchExists(*item.BranchCode); err != nil {
+					return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+				}
 			}
 		}
 		for _, detail := range item.Details {

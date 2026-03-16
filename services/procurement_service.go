@@ -42,12 +42,22 @@ func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.Pr
 	}
 
 	// Validasi semua branch code sebelum mulai transaksi DB
+	isHO := homebase.Branch.BranchType == "HO"
 	for _, item := range req.Items {
 		if item.BranchCode != nil && *item.BranchCode != "" {
-			if err := validateBranchExists(*item.BranchCode); err != nil {
-				return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+			// Non-HO: items.branch_code WAJIB sama dengan homebase user
+			// HO: bebas isi branch mana saja, cukup validasi exist
+			if !isHO {
+				if *item.BranchCode != homebase.Branch.BranchCode {
+					return nil, fmt.Errorf("item '%s': branch_code must match your homebase (%s)", item.ItemName, homebase.Branch.BranchCode)
+				}
+			} else {
+				if err := validateBranchExists(*item.BranchCode); err != nil {
+					return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+				}
 			}
 		}
+		// details.branch_code bebas untuk semua, cukup validasi exist
 		for _, detail := range item.Details {
 			if err := validateBranchExists(detail.BranchCode); err != nil {
 				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
@@ -243,10 +253,17 @@ func UpdateProcurement(transactionNumber string, userID string, req dto.CreatePr
 	}
 
 	// Validasi semua branch code sebelum mulai transaksi DB
+	isHO := homebase.Branch.BranchType == "HO"
 	for _, item := range req.Items {
 		if item.BranchCode != nil && *item.BranchCode != "" {
-			if err := validateBranchExists(*item.BranchCode); err != nil {
-				return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+			if !isHO {
+				if *item.BranchCode != homebase.Branch.BranchCode {
+					return nil, fmt.Errorf("item '%s': branch_code must match your homebase (%s)", item.ItemName, homebase.Branch.BranchCode)
+				}
+			} else {
+				if err := validateBranchExists(*item.BranchCode); err != nil {
+					return nil, fmt.Errorf("item '%s': %w", item.ItemName, err)
+				}
 			}
 		}
 		for _, detail := range item.Details {
