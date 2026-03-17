@@ -6,6 +6,7 @@ import (
 	"backend-go/models"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"gorm.io/gorm"
@@ -576,7 +577,6 @@ func GetTransactionApprovalStatus(transactionNumber, transactionType string) (*d
 		Preload("ActualApprover").
 		Preload("ActualRejecter").
 		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
-		Order("approval_flow_steps.step_order ASC").
 		Find(&approvals).Error; err != nil {
 		return nil, err
 	}
@@ -584,6 +584,19 @@ func GetTransactionApprovalStatus(transactionNumber, transactionType string) (*d
 	if len(approvals) == 0 {
 		return nil, errors.New("no approval found for this transaction")
 	}
+
+	// Sort by step_order setelah fetch karena ORDER BY tidak bisa langsung
+	// ke kolom di table lain tanpa explicit JOIN
+	sort.Slice(approvals, func(i, j int) bool {
+		stepI, stepJ := 0, 0
+		if approvals[i].ApprovalFlowStep != nil {
+			stepI = approvals[i].ApprovalFlowStep.StepOrder
+		}
+		if approvals[j].ApprovalFlowStep != nil {
+			stepJ = approvals[j].ApprovalFlowStep.StepOrder
+		}
+		return stepI < stepJ
+	})
 
 	// Calculate summary
 	totalSteps := len(approvals)
