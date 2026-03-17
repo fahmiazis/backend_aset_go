@@ -6,6 +6,7 @@ import (
 	"backend-go/models"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -441,7 +442,7 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 	if err := config.DB.
 		Preload("ApprovalFlowStep").
 		First(&approval, "id = ?", req.TransactionApprovalID).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New("transaction approval not found")
 		}
 		return err
@@ -465,6 +466,11 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 			First(&userRole).Error; err != nil {
 			return errors.New("you do not have the required role to approve this transaction")
 		}
+	}
+
+	// Validasi branch approver harus sama dengan branch creator transaksi
+	if err := validateApproverBranch(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
+		return err
 	}
 
 	// Update approval
@@ -497,6 +503,13 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 		return err
 	}
 
+	// Auto-trigger complete approval jika semua step sudah approved
+	if err := autoCompleteProcurementApproval(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
+		// Log error tapi tidak return error — approval tetap berhasil
+		// Complete approval bisa di-trigger manual jika auto gagal
+		fmt.Printf("auto complete approval warning: %v\n", err)
+	}
+
 	return nil
 }
 
@@ -507,7 +520,7 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 	if err := config.DB.
 		Preload("ApprovalFlowStep").
 		First(&approval, "id = ?", req.TransactionApprovalID).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New("transaction approval not found")
 		}
 		return err
@@ -533,6 +546,11 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 		}
 	}
 
+	// Validasi branch approver harus sama dengan branch creator transaksi
+	if err := validateApproverBranch(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
+		return err
+	}
+
 	// Update approval
 	now := time.Now()
 	updates := map[string]interface{}{
@@ -544,6 +562,12 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 
 	if err := config.DB.Model(&approval).Updates(updates).Error; err != nil {
 		return err
+	}
+
+	notes := ""
+
+	if req.Notes != nil {
+		notes = *req.Notes
 	}
 
 	// Create signature record
@@ -561,6 +585,11 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 
 	if err := config.DB.Create(&signature).Error; err != nil {
 		return err
+	}
+
+	// Auto-reject transaksi jika approval di-reject
+	if err := autoRejectTransaction(userID, approval.TransactionNumber, approval.TransactionType, notes); err != nil {
+		fmt.Printf("auto reject transaction warning: %v\n", err)
 	}
 
 	return nil
@@ -829,4 +858,138 @@ func mapTransactionApprovalsToResponse(approvals []models.TransactionApproval) [
 		response[i] = mapTransactionApprovalToResponse(approval)
 	}
 	return response
+}
+
+func validateApproverBranch(approverUserID, transactionNumber, transactionType string) error {
+	// Ambil branch homebase approver
+	approverHomebase, err := GetUserActiveHomebase(approverUserID)
+	if err != nil {
+		return fmt.Errorf("failed to get approver homebase: %w", err)
+	}
+
+	// Ambil branch creator dari transaksi
+	var transaction models.Transaction
+	if err := config.DB.
+		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
+		First(&transaction).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("transaction not found")
+		}
+		return err
+	}
+
+	// Ambil branch homebase creator transaksi
+	creatorHomebase, err := GetUserActiveHomebase(transaction.CreatedBy)
+	if err != nil {
+		return fmt.Errorf("failed to get transaction creator homebase: %w", err)
+	}
+
+	if approverHomebase.Branch.BranchCode != creatorHomebase.Branch.BranchCode {
+		return fmt.Errorf("you can only approve transactions from your branch (%s)", approverHomebase.Branch.BranchCode)
+	}
+
+	return nil
+}
+
+// autoCompleteProcurementApproval auto-trigger complete approval
+// jika semua step sudah approved
+func autoCompleteProcurementApproval(userID, transactionNumber, transactionType string) error {
+	// Hanya untuk procurement
+	if transactionType != "procurement" {
+		return nil
+	}
+
+	// Cek status semua approval step
+	var total, approved int64
+	config.DB.Model(&models.TransactionApproval{}).
+		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
+		Count(&total)
+
+	config.DB.Model(&models.TransactionApproval{}).
+		Where("transaction_number = ? AND transaction_type = ? AND status = ?", transactionNumber, transactionType, "approved").
+		Count(&approved)
+
+	if total == 0 || approved < total {
+		return nil // belum semua approved
+	}
+
+	// Semua approved — transisi ke PROSES_BUDGET
+	transaction, err := getProcurementTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	if transaction.CurrentStage != models.StageApproval {
+		return nil // sudah bukan di stage APPROVAL, skip
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageProsesBudget); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageProsesBudget,
+		models.ActionApprove, userID, nil, nil); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit().Error
+}
+
+// autoRejectTransaction auto-reject transaksi ketika salah satu approval step di-reject
+func autoRejectTransaction(userID, transactionNumber, transactionType, notes string) error {
+	// Hanya untuk procurement
+	if transactionType != "procurement" {
+		return nil
+	}
+
+	transaction, err := getProcurementTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	// Kalau sudah REJECTED atau SELESAI, skip
+	if transaction.CurrentStage == models.StageRejected ||
+		transaction.CurrentStage == models.StageSelesai {
+		return nil
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageRejected); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	reason := "Rejected by approver"
+	if notes != "" {
+		reason = notes
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageRejected,
+		models.ActionReject, userID, nil, &reason); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	MarkTransactionAsExpired(transactionNumber)
+
+	return tx.Commit().Error
 }
