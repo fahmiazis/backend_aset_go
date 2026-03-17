@@ -2,9 +2,11 @@ package models
 
 // TransactionStatus constants (shared across all transaction tables)
 const (
-	TransactionStatusDraft    = "DRAFT"
-	TransactionStatusApproved = "APPROVED"
-	TransactionStatusRejected = "REJECTED"
+	TransactionStatusDraft      = "DRAFT"
+	TransactionStatusApproved   = "APPROVED"
+	TransactionStatusRejected   = "REJECTED"
+	TransactionStatusPending    = "PENDING"
+	TransactionStatusProcessing = "PROCESSING"
 )
 
 const (

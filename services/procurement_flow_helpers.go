@@ -39,21 +39,29 @@ func recordStage(tx *gorm.DB, transactionID uint, transactionNumber, fromStage, 
 	return tx.Create(&stage).Error
 }
 
-// updateTransactionStage update current_stage di tabel transactions
+// stageToStatus mapping stage ke status transaksi
+var stageToStatus = map[string]string{
+	models.StageDraft:          models.TransactionStatusDraft,
+	models.StageVerifikasiAset: "PENDING",
+	models.StageApproval:       "PENDING",
+	models.StageProsesBudget:   "PROCESSING",
+	models.StageEksekusiAset:   "PROCESSING",
+	models.StageGR:             "PROCESSING",
+	models.StageSelesai:        models.TransactionStatusApproved,
+	models.StageRejected:       models.TransactionStatusRejected,
+}
+
+// updateTransactionStage update current_stage & status di tabel transactions
 func updateTransactionStage(tx *gorm.DB, transaction *models.Transaction, toStage string) error {
-	updates := map[string]interface{}{
+	status, ok := stageToStatus[toStage]
+	if !ok {
+		status = models.TransactionStatusDraft // fallback
+	}
+
+	return tx.Model(transaction).Updates(map[string]interface{}{
 		"current_stage": toStage,
-	}
-
-	// Kalau APPROVED atau SELESAI, update status juga
-	if toStage == models.StageSelesai {
-		updates["status"] = models.TransactionStatusApproved
-	}
-	if toStage == models.StageRejected {
-		updates["status"] = models.TransactionStatusRejected
-	}
-
-	return tx.Model(transaction).Updates(updates).Error
+		"status":        status,
+	}).Error
 }
 
 // validateStageTransition memastikan perpindahan stage valid
