@@ -576,7 +576,7 @@ func GetTransactionApprovalStatus(transactionNumber, transactionType string) (*d
 		Preload("ActualApprover").
 		Preload("ActualRejecter").
 		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
-		Order("approval_flow_step.step_order ASC").
+		Order("approval_flow_steps.step_order ASC").
 		Find(&approvals).Error; err != nil {
 		return nil, err
 	}
