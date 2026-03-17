@@ -860,14 +860,39 @@ func mapTransactionApprovalsToResponse(approvals []models.TransactionApproval) [
 	return response
 }
 
-func validateApproverBranch(approverUserID, transactionNumber, transactionType string) error {
-	// Ambil branch homebase approver
-	approverHomebase, err := GetUserActiveHomebase(approverUserID)
-	if err != nil {
-		return fmt.Errorf("failed to get approver homebase: %w", err)
-	}
+// func validateApproverBranch(approverUserID, transactionNumber, transactionType string) error {
+// 	// Ambil branch homebase approver
+// 	approverHomebase, err := GetUserActiveHomebase(approverUserID)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to get approver homebase: %w", err)
+// 	}
 
-	// Ambil branch creator dari transaksi
+// 	// Ambil branch creator dari transaksi
+// 	var transaction models.Transaction
+// 	if err := config.DB.
+// 		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
+// 		First(&transaction).Error; err != nil {
+// 		if errors.Is(err, gorm.ErrRecordNotFound) {
+// 			return errors.New("transaction not found")
+// 		}
+// 		return err
+// 	}
+
+// 	// Ambil branch homebase creator transaksi
+// 	creatorHomebase, err := GetUserActiveHomebase(transaction.CreatedBy)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to get transaction creator homebase: %w", err)
+// 	}
+
+// 	if approverHomebase.Branch.BranchCode != creatorHomebase.Branch.BranchCode {
+// 		return fmt.Errorf("you can only approve transactions from your branch (%s)", approverHomebase.Branch.BranchCode)
+// 	}
+
+// 	return nil
+// }
+
+func validateApproverBranch(approverUserID, transactionNumber, transactionType string) error {
+	// Ambil transaksi
 	var transaction models.Transaction
 	if err := config.DB.
 		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
@@ -878,17 +903,29 @@ func validateApproverBranch(approverUserID, transactionNumber, transactionType s
 		return err
 	}
 
-	// Ambil branch homebase creator transaksi
+	// Ambil homebase creator (pakai function lu yang udah ada)
 	creatorHomebase, err := GetUserActiveHomebase(transaction.CreatedBy)
 	if err != nil {
-		return fmt.Errorf("failed to get transaction creator homebase: %w", err)
+		return fmt.Errorf("failed to get creator homebase: %w", err)
 	}
 
-	if approverHomebase.Branch.BranchCode != creatorHomebase.Branch.BranchCode {
-		return fmt.Errorf("you can only approve transactions from your branch (%s)", approverHomebase.Branch.BranchCode)
+	// Ambil semua branch approver
+	approverBranches, err := GetUserBranchs(approverUserID)
+	if err != nil {
+		return fmt.Errorf("failed to get approver branches: %w", err)
 	}
 
-	return nil
+	// Cek apakah branch creator ada di branch approver
+	for _, branch := range approverBranches {
+		if branch.BranchCode == creatorHomebase.Branch.BranchCode {
+			return nil
+		}
+	}
+
+	return fmt.Errorf(
+		"you can only approve transactions from branch %s",
+		creatorHomebase.Branch.BranchCode,
+	)
 }
 
 // autoCompleteProcurementApproval auto-trigger complete approval
