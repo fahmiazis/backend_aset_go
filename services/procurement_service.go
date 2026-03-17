@@ -57,10 +57,15 @@ func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.Pr
 				}
 			}
 		}
-		// details.branch_code bebas untuk semua, cukup validasi exist
+		// details.branch_code:
+		// - HO: bebas isi branch mana saja, cukup validasi exist
+		// - Non-HO: hanya boleh isi branch homebase sendiri
 		for _, detail := range item.Details {
 			if err := validateBranchExists(detail.BranchCode); err != nil {
 				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
+			}
+			if !isHO && detail.BranchCode != homebase.Branch.BranchCode {
+				return nil, fmt.Errorf("item '%s' detail: only HO users can add details for other branches (your homebase: %s)", item.ItemName, homebase.Branch.BranchCode)
 			}
 		}
 	}
@@ -269,6 +274,9 @@ func UpdateProcurement(transactionNumber string, userID string, req dto.CreatePr
 		for _, detail := range item.Details {
 			if err := validateBranchExists(detail.BranchCode); err != nil {
 				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
+			}
+			if !isHO && detail.BranchCode != homebase.Branch.BranchCode {
+				return nil, fmt.Errorf("item '%s' detail: only HO users can add details for other branches (your homebase: %s)", item.ItemName, homebase.Branch.BranchCode)
 			}
 		}
 	}
