@@ -26,10 +26,8 @@ func validateBranchExists(branchCode string) error {
 }
 
 func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.ProcurementResponse, error) {
-	transactionNumber, err := GenerateTransactionNumber(userID, TxProcurement)
-	if err != nil {
-		return nil, err
-	}
+	// ---- VALIDASI DULU SEBELUM GENERATE NOMOR TRANSAKSI ----
+	// Supaya nomor tidak ter-reserve kalau input tidak valid
 
 	transactionDate, err := time.Parse("2006-01-02", req.TransactionDate)
 	if err != nil {
@@ -41,12 +39,19 @@ func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.Pr
 		return nil, err
 	}
 
-	// Validasi semua branch code sebelum mulai transaksi DB
 	isHO := homebase.Branch.BranchType == "HO"
 	for _, item := range req.Items {
+		// Validasi category exist
+		var category models.AssetCategory
+		if err := config.DB.First(&category, item.CategoryID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, fmt.Errorf("category not found: %d", item.CategoryID)
+			}
+			return nil, err
+		}
+
+		// Validasi items.branch_code
 		if item.BranchCode != nil && *item.BranchCode != "" {
-			// Non-HO: items.branch_code WAJIB sama dengan homebase user
-			// HO: bebas isi branch mana saja, cukup validasi exist
 			if !isHO {
 				if *item.BranchCode != homebase.Branch.BranchCode {
 					return nil, fmt.Errorf("item '%s': branch_code must match your homebase (%s)", item.ItemName, homebase.Branch.BranchCode)
@@ -57,9 +62,8 @@ func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.Pr
 				}
 			}
 		}
-		// details.branch_code:
-		// - HO: bebas isi branch mana saja, cukup validasi exist
-		// - Non-HO: hanya boleh isi branch homebase sendiri
+
+		// Validasi details.branch_code
 		for _, detail := range item.Details {
 			if err := validateBranchExists(detail.BranchCode); err != nil {
 				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
@@ -68,6 +72,12 @@ func CreateProcurement(userID string, req dto.CreateProcurementRequest) (*dto.Pr
 				return nil, fmt.Errorf("item '%s' detail: only HO users can add details for other branches (your homebase: %s)", item.ItemName, homebase.Branch.BranchCode)
 			}
 		}
+	}
+
+	// ---- SEMUA VALID, BARU GENERATE NOMOR TRANSAKSI ----
+	transactionNumber, err := GenerateTransactionNumber(userID, TxProcurement)
+	if err != nil {
+		return nil, err
 	}
 
 	tx := config.DB.Begin()
@@ -257,9 +267,19 @@ func UpdateProcurement(transactionNumber string, userID string, req dto.CreatePr
 		return nil, err
 	}
 
-	// Validasi semua branch code sebelum mulai transaksi DB
+	// ---- VALIDASI DULU SEBELUM MULAI TX ----
 	isHO := homebase.Branch.BranchType == "HO"
 	for _, item := range req.Items {
+		// Validasi category exist
+		var category models.AssetCategory
+		if err := config.DB.First(&category, item.CategoryID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, fmt.Errorf("category not found: %d", item.CategoryID)
+			}
+			return nil, err
+		}
+
+		// Validasi items.branch_code
 		if item.BranchCode != nil && *item.BranchCode != "" {
 			if !isHO {
 				if *item.BranchCode != homebase.Branch.BranchCode {
@@ -271,6 +291,8 @@ func UpdateProcurement(transactionNumber string, userID string, req dto.CreatePr
 				}
 			}
 		}
+
+		// Validasi details.branch_code
 		for _, detail := range item.Details {
 			if err := validateBranchExists(detail.BranchCode); err != nil {
 				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
