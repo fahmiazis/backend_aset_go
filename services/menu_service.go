@@ -353,6 +353,7 @@ func mapMenuToResponse(menu models.Menu) dto.MenuResponse {
 		ParentID:   menu.ParentID,
 		Name:       menu.Name,
 		Path:       menu.Path,
+		RoutePath:  menu.RoutePath,
 		IconName:   menu.IconName,
 		OrderIndex: menu.OrderIndex,
 		Status:     menu.Status,
