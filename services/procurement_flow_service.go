@@ -334,6 +334,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 	var verifiedItems []models.TransactionItemVerification
 	if err := config.DB.
 		Preload("TransactionProcurement.Category").
+		Preload("TransactionProcurement.TransactionProcurementDetails").
 		Where("transaction_id = ? AND item_type = ? AND is_active = ?",
 			transaction.ID, models.ItemTypeAsset, true).
 		Find(&verifiedItems).Error; err != nil {
@@ -360,59 +361,88 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 		proc := verif.TransactionProcurement
 		category := proc.Category
 
-		// Generate nomor asset per item quantity
-		// Kalau quantity > 1, generate qty nomor asset
-		for i := 0; i < proc.Quantity; i++ {
-			assetNumber, err := GenerateAssetNumber(tx, category.CategoryCode)
-			if err != nil {
-				tx.Rollback()
-				return nil, fmt.Errorf("failed to generate asset number: %w", err)
-			}
+		// Tentukan branch per asset:
+		// - Kalau ada details → ikut branch per detail (split sesuai qty detail)
+		// - Kalau tidak ada details → semua asset pakai branch item parent
+		type branchQty struct {
+			BranchCode string
+			Quantity   int
+		}
 
-			// Create asset record dengan status BELUM_GR
-			asset := models.Asset{
-				AssetNumber: assetNumber,
-				AssetName:   proc.ItemName,
-				CategoryID:  &category.ID,
-				BranchCode:  &proc.BranchCode,
-				AssetStatus: models.AssetStatusBelumGR,
-			}
+		var branchList []branchQty
 
-			if err := tx.Create(&asset).Error; err != nil {
-				tx.Rollback()
-				return nil, fmt.Errorf("failed to create asset record: %w", err)
-			}
+		// Load details dari preload
+		details := proc.TransactionProcurementDetails
 
-			// Generate document number untuk asset acquisition
-			documentNumber, err := GenerateDocumentNumber(tx)
-			if err != nil {
-				tx.Rollback()
-				return nil, fmt.Errorf("failed to generate document number: %w", err)
+		if len(details) > 0 {
+			for _, d := range details {
+				branchList = append(branchList, branchQty{
+					BranchCode: d.BranchCode,
+					Quantity:   d.Quantity,
+				})
 			}
+		} else {
+			// Tidak ada details → semua pakai branch item parent
+			branchList = append(branchList, branchQty{
+				BranchCode: proc.BranchCode,
+				Quantity:   proc.Quantity,
+			})
+		}
 
-			// Create asset acquisition record
-			assetID := asset.ID
-			acquisition := models.AssetAcquisition{
-				DocumentNumber:    documentNumber,
-				AssetID:           &assetID,
-				AssetNumber:       assetNumber,
-				AssetName:         proc.ItemName,
-				TransactionID:     &transaction.ID,
-				TransactionNumber: transaction.TransactionNumber,
-				AcquisitionValue:  proc.UnitPrice,
-				CategoryID:        &category.ID,
-				BranchCode:        proc.BranchCode,
-				Status:            "DRAFT",
-				CreatedBy:         userID,
+		// Generate asset per branch sesuai quantity
+		for _, bq := range branchList {
+			for i := 0; i < bq.Quantity; i++ {
+				assetNumber, err := GenerateAssetNumber(tx, category.CategoryCode)
+				if err != nil {
+					tx.Rollback()
+					return nil, fmt.Errorf("failed to generate asset number: %w", err)
+				}
+
+				branchCode := bq.BranchCode
+				asset := models.Asset{
+					AssetNumber: assetNumber,
+					AssetName:   proc.ItemName,
+					CategoryID:  &category.ID,
+					BranchCode:  &branchCode,
+					AssetStatus: models.AssetStatusBelumGR,
+				}
+
+				if err := tx.Create(&asset).Error; err != nil {
+					tx.Rollback()
+					return nil, fmt.Errorf("failed to create asset record: %w", err)
+				}
+
+				documentNumber, err := GenerateDocumentNumber(tx)
+				if err != nil {
+					tx.Rollback()
+					return nil, fmt.Errorf("failed to generate document number: %w", err)
+				}
+
+				assetID := asset.ID
+				procID := proc.ID
+				acquisition := models.AssetAcquisition{
+					DocumentNumber:           documentNumber,
+					AssetID:                  &assetID,
+					AssetNumber:              assetNumber,
+					AssetName:                proc.ItemName,
+					TransactionID:            &transaction.ID,
+					TransactionNumber:        transaction.TransactionNumber,
+					TransactionProcurementID: &procID,
+					AcquisitionValue:         proc.UnitPrice,
+					CategoryID:               &category.ID,
+					BranchCode:               branchCode,
+					Status:                   "DRAFT",
+					CreatedBy:                userID,
+				}
+
+				if err := tx.Create(&acquisition).Error; err != nil {
+					tx.Rollback()
+					return nil, fmt.Errorf("failed to create asset acquisition: %w", err)
+				}
+
+				// TODO: Create initial asset value setelah model AssetValue dikonfirmasi
+				// assetValue := models.AssetValue{...}
 			}
-
-			if err := tx.Create(&acquisition).Error; err != nil {
-				tx.Rollback()
-				return nil, fmt.Errorf("failed to create asset acquisition: %w", err)
-			}
-
-			// TODO: Create initial asset value setelah model AssetValue dikonfirmasi
-			// assetValue := models.AssetValue{...}
 		}
 	}
 

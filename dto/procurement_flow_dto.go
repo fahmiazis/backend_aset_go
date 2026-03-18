@@ -191,7 +191,7 @@ type ProcurementTransactionResponse struct {
 type ProcurementItemWithVerificationResponse struct {
 	ProcurementItemResponse
 	Verification *TransactionItemVerificationResponse `json:"verification,omitempty"`
-	Asset        *AssetBriefResponse                  `json:"asset,omitempty"` // terisi setelah EKSEKUSI_ASET
+	Assets       []AssetBriefResponse                 `json:"assets,omitempty"` // list semua asset per item
 }
 
 type AssetBriefResponse struct {

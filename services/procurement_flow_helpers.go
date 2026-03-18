@@ -256,19 +256,6 @@ func GetProcurementDetailWithStage(transactionNumber string) (*dto.ProcurementDe
 		grMap[gr.AssetID] = gr
 	}
 
-	// Get assets yang sudah digenerate (jika sudah EKSEKUSI_ASET)
-	var assetAcquisitions []models.AssetAcquisition
-	config.DB.
-		Preload("Asset").
-		Where("transaction_id = ?", transaction.ID).
-		Find(&assetAcquisitions)
-	acquisitionMap := make(map[uint]*models.Asset)
-	for i := range assetAcquisitions {
-		if assetAcquisitions[i].Asset != nil && assetAcquisitions[i].AssetID != nil {
-			acquisitionMap[*assetAcquisitions[i].AssetID] = assetAcquisitions[i].Asset
-		}
-	}
-
 	// Build items response
 	items := make([]dto.ProcurementItemWithVerificationResponse, len(procurements))
 	for i, p := range procurements {
@@ -289,6 +276,35 @@ func GetProcurementDetailWithStage(transactionNumber string) (*dto.ProcurementDe
 				VerifiedAt:               v.VerifiedAt,
 				Notes:                    v.Notes,
 			}
+		}
+
+		// Get assets per item langsung by transaction_procurement_id
+		// tidak pakai join, get terpisah per item
+		var acquisitions []models.AssetAcquisition
+		config.DB.
+			Preload("Asset").
+			Where("transaction_procurement_id = ?", p.ID).
+			Find(&acquisitions)
+
+		if len(acquisitions) > 0 {
+			assetList := make([]dto.AssetBriefResponse, 0, len(acquisitions))
+			for _, acq := range acquisitions {
+				if acq.Asset == nil || acq.AssetID == nil {
+					continue
+				}
+				grStatus := "BELUM_GR"
+				if _, hasGR := grMap[*acq.AssetID]; hasGR {
+					grStatus = "AVAILABLE"
+				}
+				assetList = append(assetList, dto.AssetBriefResponse{
+					ID:          acq.Asset.ID,
+					AssetNumber: acq.Asset.AssetNumber,
+					AssetName:   acq.Asset.AssetName,
+					AssetStatus: acq.Asset.AssetStatus,
+					GRStatus:    &grStatus,
+				})
+			}
+			item.Assets = assetList
 		}
 
 		items[i] = item
