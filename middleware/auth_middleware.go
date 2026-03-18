@@ -14,7 +14,6 @@ import (
 // AuthMiddleware - Validate JWT access token
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Get Authorization header
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			utils.ErrorResponse(c, http.StatusUnauthorized, "Authorization header required")
@@ -22,7 +21,6 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Check Bearer token format
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			utils.ErrorResponse(c, http.StatusUnauthorized, "Invalid authorization header format")
@@ -32,7 +30,6 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		tokenString := parts[1]
 
-		// Validate token
 		claims, err := utils.ValidateAccessToken(tokenString)
 		if err != nil {
 			utils.ErrorResponse(c, http.StatusUnauthorized, "Invalid or expired token")
@@ -40,7 +37,6 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Set user info in context
 		c.Set("user_id", claims.UserID)
 		c.Set("username", claims.Username)
 		c.Set("email", claims.Email)
@@ -53,10 +49,8 @@ func AuthMiddleware() gin.HandlerFunc {
 }
 
 // RequireRole - Check if user has required role (by role name)
-// Usage: middleware.RequireRole("admin", "manager")
 func RequireRole(requiredRoles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Get user roles from context
 		rolesInterface, exists := c.Get("roles")
 		if !exists {
 			utils.ErrorResponse(c, http.StatusForbidden, "No roles found")
@@ -71,7 +65,6 @@ func RequireRole(requiredRoles ...string) gin.HandlerFunc {
 			return
 		}
 
-		// Check if user has any of the required roles
 		hasRole := false
 		for _, requiredRole := range requiredRoles {
 			for _, userRole := range userRoles {
@@ -96,11 +89,8 @@ func RequireRole(requiredRoles ...string) gin.HandlerFunc {
 }
 
 // RequirePermission - Check if user has required permission on current route
-// Logic: ambil path dari request → cari menu dengan route_path yang match → cek role_menus
-// Usage: middleware.RequirePermission("write", "delete")
 func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Get user ID from context (set by AuthMiddleware)
 		userID, exists := c.Get("user_id")
 		if !exists {
 			utils.ErrorResponse(c, http.StatusUnauthorized, "User not authenticated")
@@ -108,7 +98,6 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 			return
 		}
 
-		// Get current request path (full path dengan /api/v1)
 		requestPath := c.Request.URL.Path
 
 		// 1. Ambil user roles
@@ -130,25 +119,37 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 			roleIDs[i] = ur.RoleID
 		}
 
-		// 2. Cari menu yang route_path-nya exact match dengan request path
-		// Untuk route dinamis (misal /api/v1/users/:id), kita perlu strip ID-nya
-		// Simple approach: ambil base path aja (split by "/" dan ambil s.d 3 segment)
-		// Misal: /api/v1/users/123 → /api/v1/users
-		pathParts := strings.Split(requestPath, "/")
+		// 2. Normalize path ke level child (/api/v1/resource/sub-resource)
+		// Leaf endpoints seperti /execute, /verify, /gr tidak didaftarkan di menu
+		// Permission dicek di level child saja
+		// Contoh:
+		// /api/v1/transactions/procurement/execute → /api/v1/transactions/procurement
+		// /api/v1/transactions/procurement/submit → /api/v1/transactions/procurement
+		// /api/v1/users/123 → /api/v1/users
+		pathParts := strings.Split(strings.TrimRight(requestPath, "/"), "/")
 		basePath := requestPath
-		if len(pathParts) > 4 { // /api/v1/resource/...
-			basePath = strings.Join(pathParts[:4], "/") // ambil /api/v1/resource
+		if len(pathParts) > 5 {
+			// lebih dari 5 segment → trim ke 5 (/api/v1/resource/sub-resource)
+			basePath = strings.Join(pathParts[:5], "/")
+		} else if len(pathParts) == 5 {
+			// tepat 5 segment → sudah di level child, pakai apa adanya
+			basePath = strings.Join(pathParts, "/")
+		} else if len(pathParts) > 4 {
+			// 4 segment → level parent
+			basePath = strings.Join(pathParts[:4], "/")
 		}
 
+		// 3. Cari menu — FIX: strict block kalau menu tidak ditemukan
 		var menu models.Menu
 		if err := config.DB.Where("route_path = ?", basePath).First(&menu).Error; err != nil {
-			// Menu tidak ditemukan, skip permission check
-			// Bisa juga di-block tergantung policy
-			c.Next()
+			// Menu tidak terdaftar = akses ditolak
+			// Semua endpoint wajib didaftarkan di tabel menus
+			utils.ErrorResponse(c, http.StatusForbidden, "Access denied: route not registered in menu")
+			c.Abort()
 			return
 		}
 
-		// 3. Ambil role_menus untuk menu ini dari role-role user
+		// 4. Ambil role_menus untuk menu ini
 		var roleMenus []models.RoleMenu
 		if err := config.DB.Where("role_id IN ? AND menu_id = ?", roleIDs, menu.ID).Find(&roleMenus).Error; err != nil {
 			utils.ErrorResponse(c, http.StatusInternalServerError, "Failed to fetch permissions")
@@ -162,7 +163,7 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 			return
 		}
 
-		// 4. Merge permissions dari semua role_menus (union)
+		// 5. Merge permissions dari semua role (union)
 		userPermissions := make(map[string]bool)
 		for _, rm := range roleMenus {
 			for _, p := range rm.Permissions {
@@ -170,7 +171,7 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 			}
 		}
 
-		// 5. Check if user has any of the required permissions
+		// 6. Check required permissions
 		hasPermission := false
 		for _, reqPerm := range requiredPermissions {
 			if userPermissions[reqPerm] {
@@ -180,7 +181,7 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 		}
 
 		if !hasPermission {
-			utils.ErrorResponse(c, http.StatusForbidden, "Insufficient permissions for this action")
+			utils.ErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Insufficient permissions: required %v", requiredPermissions))
 			c.Abort()
 			return
 		}

@@ -383,9 +383,17 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 				return nil, fmt.Errorf("failed to create asset record: %w", err)
 			}
 
+			// Generate document number untuk asset acquisition
+			documentNumber, err := GenerateDocumentNumber(tx)
+			if err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("failed to generate document number: %w", err)
+			}
+
 			// Create asset acquisition record
 			assetID := asset.ID
 			acquisition := models.AssetAcquisition{
+				DocumentNumber:    documentNumber,
 				AssetID:           &assetID,
 				AssetNumber:       assetNumber,
 				AssetName:         proc.ItemName,

@@ -143,10 +143,40 @@ func GenerateIONumber(tx *gorm.DB, branchCode string) (string, error) {
 }
 
 // ============================================================
-// GENERATE ASSET NUMBER
-// Format: {category_code}{ddmmyy}{nomor_urut_4digit}
-// Contoh: VHCL0603260001
+// GENERATE DOCUMENT NUMBER
+// Format: DN{8 digit nomor urut global}
+// Contoh: DN00000001
 // ============================================================
+
+func GenerateDocumentNumber(tx *gorm.DB) (string, error) {
+	var seq models.DocumentNumberSequence
+
+	// Pakai reference_code "DN" sebagai key global
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("sequence_type = ? AND reference_code = ?", "DN", "DN").
+		First(&seq).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		seq = models.DocumentNumberSequence{
+			SequenceType:  "DN",
+			ReferenceCode: "DN",
+			LastSequence:  0,
+		}
+		if err := tx.Create(&seq).Error; err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
+
+	seq.LastSequence++
+	if err := tx.Model(&seq).Update("last_sequence", seq.LastSequence).Error; err != nil {
+		return "", err
+	}
+
+	// Format: DN00000001
+	return fmt.Sprintf("DN%08d", seq.LastSequence), nil
+}
 
 func GenerateAssetNumber(tx *gorm.DB, categoryCode string) (string, error) {
 	var seq models.DocumentNumberSequence
