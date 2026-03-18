@@ -266,12 +266,26 @@ func ProcessProcurementBudget(userID string, transactionNumber string, req dto.P
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageProsesBudget)
 	}
 
-	// Ambil branch_code dari created_by user homebase
-	homebase, err := GetUserActiveHomebase(transaction.CreatedBy)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get branch for IO number generation: %w", err)
+	// Kumpulkan semua branch unik dari items dan details
+	branchSet := make(map[string]bool)
+
+	var procurements []models.TransactionProcurement
+	config.DB.
+		Preload("TransactionProcurementDetails").
+		Where("transaction_id = ?", transaction.ID).
+		Find(&procurements)
+
+	for _, proc := range procurements {
+		if len(proc.TransactionProcurementDetails) > 0 {
+			for _, d := range proc.TransactionProcurementDetails {
+				branchSet[d.BranchCode] = true
+			}
+		} else {
+			branchSet[proc.BranchCode] = true
+		}
 	}
-	branchCode := homebase.Branch.BranchCode
+
+	now := time.Now()
 
 	tx := config.DB.Begin()
 	defer func() {
@@ -280,15 +294,37 @@ func ProcessProcurementBudget(userID string, transactionNumber string, req dto.P
 		}
 	}()
 
-	// Generate nomor IO
-	ioNumber, err := GenerateIONumber(tx, branchCode)
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("failed to generate IO number: %w", err)
+	// Generate IO number per branch unik → simpan ke transaction_io_numbers
+	// IO number pertama juga disimpan di transactions.io_number sebagai referensi
+	firstIONumber := ""
+	for branchCode := range branchSet {
+		ioNumber, err := GenerateIONumber(tx, branchCode)
+		if err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to generate IO number for branch %s: %w", branchCode, err)
+		}
+
+		ioRecord := models.TransactionIONumber{
+			TransactionID:     transaction.ID,
+			TransactionNumber: transactionNumber,
+			BranchCode:        branchCode,
+			IONumber:          ioNumber,
+			ProcessedBy:       userID,
+			ProcessedAt:       now,
+		}
+
+		if err := tx.Create(&ioRecord).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to save IO number for branch %s: %w", branchCode, err)
+		}
+
+		if firstIONumber == "" {
+			firstIONumber = ioNumber
+		}
 	}
 
-	// Simpan io_number ke transaction
-	if err := tx.Model(transaction).Update("io_number", ioNumber).Error; err != nil {
+	// Simpan IO number pertama ke transactions.io_number sebagai referensi utama
+	if err := tx.Model(transaction).Update("io_number", firstIONumber).Error; err != nil {
 		tx.Rollback()
 		return nil, err
 	}
@@ -351,6 +387,14 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 			tx.Rollback()
 		}
 	}()
+
+	// Load IO numbers per branch untuk transaksi ini
+	var ioNumbers []models.TransactionIONumber
+	config.DB.Where("transaction_id = ?", transaction.ID).Find(&ioNumbers)
+	ioNumberMap := make(map[string]string) // key: branch_code, value: io_number
+	for _, io := range ioNumbers {
+		ioNumberMap[io.BranchCode] = io.IONumber
+	}
 
 	for _, verif := range verifiedItems {
 		if verif.TransactionProcurement == nil || verif.TransactionProcurement.Category == nil {
@@ -420,6 +464,8 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 
 				assetID := asset.ID
 				procID := proc.ID
+				// Ambil IO number sesuai branch asset
+				ioNum := ioNumberMap[branchCode]
 				acquisition := models.AssetAcquisition{
 					DocumentNumber:           documentNumber,
 					AssetID:                  &assetID,
@@ -431,6 +477,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 					AcquisitionValue:         proc.UnitPrice,
 					CategoryID:               &category.ID,
 					BranchCode:               branchCode,
+					IONumber:                 ioNum, // IO number sesuai branch
 					Status:                   "DRAFT",
 					CreatedBy:                userID,
 				}
