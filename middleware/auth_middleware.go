@@ -145,13 +145,9 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 			cleanParts = append(cleanParts, part)
 		}
 
-		// Ambil maksimal 2 segment bersih (/resource/sub-resource)
-		basePath := normalizedPath
-		if len(cleanParts) > 3 {
-			basePath = strings.Join(cleanParts[:3], "/")
-		} else {
-			basePath = strings.Join(cleanParts, "/")
-		}
+		// Pakai full path setelah strip /api/v1 dan ID segments
+		// route_path di menu didaftarkan sampai leaf endpoint
+		basePath := strings.Join(cleanParts, "/")
 
 		fmt.Printf("RequirePermission: requestPath=%s, basePath=%s\n", requestPath, basePath)
 
