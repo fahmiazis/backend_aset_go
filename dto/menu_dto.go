@@ -28,6 +28,7 @@ type MenuResponse struct {
 	ParentID    *string        `json:"parent_id"`
 	Name        string         `json:"name"`
 	Path        *string        `json:"path"`
+	RoutePath   *string        `json:"route_path"`
 	IconName    *string        `json:"icon_name"`
 	OrderIndex  int            `json:"order_index"`
 	Status      string         `json:"status"`
