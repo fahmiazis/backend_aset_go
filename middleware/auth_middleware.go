@@ -119,25 +119,41 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 			roleIDs[i] = ur.RoleID
 		}
 
-		// 2. Normalize path ke level child (/api/v1/resource/sub-resource)
-		// Leaf endpoints seperti /execute, /verify, /gr tidak didaftarkan di menu
-		// Permission dicek di level child saja
+		// 2. Normalize path
+		// Strip prefix /api/v1, skip segment yang berupa ID (angka/UUID)
+		// Ambil sampai 2 segment non-ID (/resource/sub-resource)
 		// Contoh:
-		// /api/v1/transactions/procurement/execute → /api/v1/transactions/procurement
-		// /api/v1/transactions/procurement/submit → /api/v1/transactions/procurement
-		// /api/v1/users/123 → /api/v1/users
-		pathParts := strings.Split(strings.TrimRight(requestPath, "/"), "/")
-		basePath := requestPath
-		if len(pathParts) > 5 {
-			// lebih dari 5 segment → trim ke 5 (/api/v1/resource/sub-resource)
-			basePath = strings.Join(pathParts[:5], "/")
-		} else if len(pathParts) == 5 {
-			// tepat 5 segment → sudah di level child, pakai apa adanya
-			basePath = strings.Join(pathParts, "/")
-		} else if len(pathParts) > 4 {
-			// 4 segment → level parent
-			basePath = strings.Join(pathParts[:4], "/")
+		// /api/v1/transactions/procurement/execute → /transactions/procurement
+		// /api/v1/assets/1/history                → /assets/history
+		// /api/v1/assets/uuid-xxx/detail          → /assets/detail
+		// /api/v1/users                           → /users
+		normalizedPath := requestPath
+		if strings.HasPrefix(normalizedPath, "/api/v1") {
+			normalizedPath = strings.TrimPrefix(normalizedPath, "/api/v1")
 		}
+
+		// Filter out ID segments (numeric atau UUID)
+		rawParts := strings.Split(strings.TrimRight(normalizedPath, "/"), "/")
+		cleanParts := []string{""}
+		for _, part := range rawParts {
+			if part == "" {
+				continue
+			}
+			if isIDSegment(part) {
+				continue // skip angka atau UUID
+			}
+			cleanParts = append(cleanParts, part)
+		}
+
+		// Ambil maksimal 2 segment bersih (/resource/sub-resource)
+		basePath := normalizedPath
+		if len(cleanParts) > 3 {
+			basePath = strings.Join(cleanParts[:3], "/")
+		} else {
+			basePath = strings.Join(cleanParts, "/")
+		}
+
+		fmt.Printf("RequirePermission: requestPath=%s, basePath=%s\n", requestPath, basePath)
 
 		// 3. Cari menu — FIX: strict block kalau menu tidak ditemukan
 		var menu models.Menu
@@ -188,6 +204,39 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// isIDSegment deteksi apakah segment path adalah ID dinamis
+// yang harus di-skip saat normalize path untuk cek menu
+// Contoh ID: "123", "456", "uuid-xxxx-xxxx"
+func isIDSegment(segment string) bool {
+	// Cek apakah numeric
+	allDigits := true
+	for _, c := range segment {
+		if c < '0' || c > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits && len(segment) > 0 {
+		return true
+	}
+
+	// Cek apakah UUID format (8-4-4-4-12 dengan hex dan dash)
+	// Contoh: a2a42c8c-9e43-48e9-8629-9d059369207c
+	if len(segment) == 36 {
+		uuidParts := strings.Split(segment, "-")
+		if len(uuidParts) == 5 &&
+			len(uuidParts[0]) == 8 &&
+			len(uuidParts[1]) == 4 &&
+			len(uuidParts[2]) == 4 &&
+			len(uuidParts[3]) == 4 &&
+			len(uuidParts[4]) == 12 {
+			return true
+		}
+	}
+
+	return false
 }
 
 // OptionalAuth - Similar to AuthMiddleware but doesn't abort if no token
