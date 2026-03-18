@@ -120,16 +120,15 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 		}
 
 		// 2. Normalize path
-		// Strip prefix /api/v1, skip segment yang berupa ID (angka/UUID)
-		// Ambil sampai 2 segment non-ID (/resource/sub-resource)
+		// Strip /api/v1, skip ID segments, ambil maks 3 segment pertama
 		// Contoh:
-		// /api/v1/transactions/procurement/execute → /transactions/procurement
-		// /api/v1/assets/1/history                → /assets/history
-		// /api/v1/assets/uuid-xxx/detail          → /assets/detail
-		// /api/v1/users                           → /users
+		// /api/v1/transactions/procurement/execute        → /transactions/procurement/execute
+		// /api/v1/transactions/procurement/execute/detail → /transactions/procurement/execute
+		// /api/v1/assets/1/history                       → /assets/history
+		// /api/v1/menus                                  → /menus
 		normalizedPath := requestPath
-		if strings.HasPrefix(normalizedPath, "/api/v1") {
-			normalizedPath = strings.TrimPrefix(normalizedPath, "/api/v1")
+		if after, ok := strings.CutPrefix(normalizedPath, "/api/v1"); ok {
+			normalizedPath = after
 		}
 
 		// Filter out ID segments (numeric atau UUID)
@@ -140,13 +139,15 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 				continue
 			}
 			if isIDSegment(part) {
-				continue // skip angka atau UUID
+				continue
 			}
 			cleanParts = append(cleanParts, part)
+			// Maksimal 3 segment: /resource/sub/leaf
+			if len(cleanParts) == 4 {
+				break
+			}
 		}
 
-		// Pakai full path setelah strip /api/v1 dan ID segments
-		// route_path di menu didaftarkan sampai leaf endpoint
 		basePath := strings.Join(cleanParts, "/")
 
 		fmt.Printf("RequirePermission: requestPath=%s, basePath=%s\n", requestPath, basePath)
