@@ -27,6 +27,7 @@ func SetupRoutes(r *gin.Engine) {
 		SetupDepreciationRoutes(v1)
 		SetupDisposalRoutes(v1)
 		SetupProcurementFlowRoutes(v1)
+		SetupAttachmentRoutes(v1)
 	}
 
 	// Health check endpoint (no auth required)
