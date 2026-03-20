@@ -443,11 +443,13 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 				}
 
 				branchCode := bq.BranchCode
+				ioNum := ioNumberMap[branchCode]
 				asset := models.Asset{
 					AssetNumber: assetNumber,
 					AssetName:   proc.ItemName,
 					CategoryID:  &category.ID,
 					BranchCode:  &branchCode,
+					IONumber:    &ioNum, // *string
 					AssetStatus: models.AssetStatusPendingReceipt,
 				}
 
@@ -465,7 +467,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 				assetID := asset.ID
 				procID := proc.ID
 				// Ambil IO number sesuai branch asset
-				ioNum := ioNumberMap[branchCode]
+				ioNum = ioNumberMap[branchCode]
 				acquisition := models.AssetAcquisition{
 					DocumentNumber:           documentNumber,
 					AssetID:                  &assetID,
@@ -487,8 +489,8 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 					return nil, fmt.Errorf("failed to create asset acquisition: %w", err)
 				}
 
-				// TODO: Create initial asset value setelah model AssetValue dikonfirmasi
-				// assetValue := models.AssetValue{...}
+				// AssetValue dibuat saat GR, bukan saat eksekusi
+				// karena nilai asset mulai berlaku setelah barang diterima
 			}
 		}
 	}
@@ -599,8 +601,36 @@ func CreateAssetGR(userID string, transactionNumber string, req dto.CreateGRRequ
 		return nil, err
 	}
 
+	// Update asset_acquisition status → APPROVED
+	if err := tx.Model(&models.AssetAcquisition{}).
+		Where("asset_id = ?", asset.ID).
+		Update("status", "APPROVED").Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to update acquisition status: %w", err)
+	}
+
+	// Create initial AssetValue — effective_date = tanggal GR
+	// book_value = acquisition_value = harga beli, accumulated_depreciation = 0
+	var acquisition models.AssetAcquisition
+	config.DB.Where("asset_id = ?", asset.ID).First(&acquisition)
+
+	acquisitionValue := acquisition.AcquisitionValue
+	assetValue := models.AssetValue{
+		AssetID:                 asset.ID,
+		EffectiveDate:           grDate,
+		BookValue:               acquisitionValue,
+		AcquisitionValue:        acquisitionValue,
+		AccumulatedDepreciation: 0,
+		AssetStatus:             &[]string{models.AssetStatusAvailable}[0],
+		IsActive:                true,
+	}
+
+	if err := tx.Create(&assetValue).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to create asset value: %w", err)
+	}
+
 	// Cek apakah semua asset di transaksi ini sudah GR
-	// Ambil total asset dari transaksi ini
 	var totalAssets int64
 	tx.Model(&models.AssetAcquisition{}).
 		Where("transaction_id = ?", transaction.ID).
