@@ -211,13 +211,13 @@ func GetProcurementGRStatus(c *gin.Context) {
 		return
 	}
 
-	result, err := services.GetProcurementDetailWithStage(transactionNumber)
+	result, err := services.GetProcurementGRStatusDetail(transactionNumber)
 	if err != nil {
-		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	utils.SuccessResponse(c, http.StatusOK, "GR status retrieved successfully", result.GRStatus)
+	utils.SuccessResponse(c, http.StatusOK, "GR status retrieved successfully", result)
 }
 
 // ============================================================
