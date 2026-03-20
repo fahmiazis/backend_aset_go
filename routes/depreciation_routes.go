@@ -35,6 +35,7 @@ func SetupDepreciationRoutes(rg *gin.RouterGroup) {
 		adminDepr.Use(middleware.RequireRole("admin"))
 		{
 			adminDepr.POST("/calculate", controllers.CalculateMonthlyDepreciation)
+			adminDepr.POST("/calculations/lock", controllers.LockMonthlyDepreciation)
 		}
 	}
 }
