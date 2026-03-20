@@ -410,14 +410,19 @@ func getRequiredConfigs(transactionType, stage, branchCode string) ([]models.Att
 	return result, nil
 }
 
-// sanitizePathSegment ganti karakter "/" di transaction number biar aman jadi folder
+// sanitizePathSegment ganti karakter tidak aman jadi underscore
+// Handles: / \ space dan karakter spesial lainnya
 func sanitizePathSegment(s string) string {
-	result := make([]byte, len(s))
+	result := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
-		if s[i] == '/' || s[i] == '\\' {
-			result[i] = '_'
-		} else {
-			result[i] = s[i]
+		c := s[i]
+		switch {
+		case c == '/' || c == '\\' || c == ' ':
+			result = append(result, '_')
+		case c >= 32 && c < 127 && c != ':' && c != '*' && c != '?' && c != '"' && c != '<' && c != '>' && c != '|':
+			result = append(result, c)
+		default:
+			result = append(result, '_')
 		}
 	}
 	return string(result)
