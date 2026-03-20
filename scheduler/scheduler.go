@@ -53,4 +53,12 @@ func runMonthlyDepreciation() {
 	}
 
 	fmt.Printf("[Scheduler] Monthly depreciation completed for period: %s\n", period)
+
+	// Auto lock setelah calculate berhasil
+	if err := services.LockMonthlyDepreciation(period); err != nil {
+		fmt.Printf("[Scheduler] WARNING: Failed to lock depreciation for %s: %v\n", period, err)
+		return
+	}
+
+	fmt.Printf("[Scheduler] Monthly depreciation locked for period: %s\n", period)
 }

@@ -496,7 +496,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 				assetID := asset.ID
 				procID := proc.ID
 				// Ambil IO number sesuai branch asset
-				ioNum = ioNumberMap[branchCode]
+				AssetioNum := ioNumberMap[branchCode]
 				acquisition := models.AssetAcquisition{
 					DocumentNumber:           documentNumber,
 					AssetID:                  &assetID,
@@ -508,7 +508,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 					AcquisitionValue:         proc.UnitPrice,
 					CategoryID:               &category.ID,
 					BranchCode:               branchCode,
-					IONumber:                 ioNum, // IO number sesuai branch
+					IONumber:                 AssetioNum, // IO number sesuai branch
 					Status:                   "DRAFT",
 					CreatedBy:                userID,
 				}

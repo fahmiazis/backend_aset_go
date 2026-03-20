@@ -133,3 +133,18 @@ func CalculateMonthlyDepreciation(c *gin.Context) {
 
 	utils.SuccessResponse(c, http.StatusOK, "Monthly depreciation calculated successfully", nil)
 }
+
+func LockMonthlyDepreciation(c *gin.Context) {
+	period := c.Query("period")
+	if period == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "period is required (format: YYYY-MM)")
+		return
+	}
+
+	if err := services.LockMonthlyDepreciation(period); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Monthly depreciation locked successfully for period "+period, nil)
+}
