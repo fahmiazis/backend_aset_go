@@ -34,7 +34,7 @@ func checkAttachmentCanProceed(transactionNumber, transactionType, stage, branch
 			return fmt.Errorf("required attachments not yet uploaded: %v", missing)
 		}
 		if summary.TotalRejected > 0 {
-			return fmt.Errorf("there are %d rejected attachment(s), please re-upload or reject the transaction", summary.TotalRejected)
+			return fmt.Errorf("there are %d rejected attachment(s), please revise the transaction or reject it", summary.TotalRejected)
 		}
 		if summary.TotalPending > 0 {
 			return fmt.Errorf("there are %d attachment(s) still pending review", summary.TotalPending)
