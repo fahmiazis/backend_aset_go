@@ -6,6 +6,7 @@ import (
 
 	"backend-go/config"
 	"backend-go/routes"
+	"backend-go/scheduler"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -37,6 +38,10 @@ func main() {
 
 	// Setup routes
 	routes.SetupRoutes(r)
+
+	// Start scheduler
+	scheduler.StartScheduler()
+	defer scheduler.StopScheduler()
 
 	// Get port from env or use default
 	port := os.Getenv("PORT")

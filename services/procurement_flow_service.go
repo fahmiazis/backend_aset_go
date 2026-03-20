@@ -30,6 +30,14 @@ func SubmitProcurement(userID string, transactionNumber string, req dto.SubmitPr
 		return nil, err
 	}
 
+	// Cek attachment DRAFT sebelum submit
+	creatorHomebase, err := GetUserActiveHomebase(transaction.CreatedBy)
+	if err == nil {
+		if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageDraft, creatorHomebase.Branch.BranchCode); err != nil {
+			return nil, err
+		}
+	}
+
 	// Pastikan ada items yang aktif
 	var itemCount int64
 	config.DB.Model(&models.TransactionProcurement{}).
@@ -113,6 +121,11 @@ func VerifyProcurement(userID string, branchCode string, transactionNumber strin
 	}
 	if allNonAsset {
 		return nil, errors.New("all items are NON_ASSET, transaction must be rejected")
+	}
+
+	// Cek attachment VERIFIKASI_ASET sebelum lanjut ke APPROVAL
+	if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageVerifikasiAset, branchCode); err != nil {
+		return nil, err
 	}
 
 	tx := config.DB.Begin()
@@ -266,6 +279,14 @@ func ProcessProcurementBudget(userID string, transactionNumber string, req dto.P
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageProsesBudget)
 	}
 
+	// Cek attachment PROSES_BUDGET sebelum generate IO dan lanjut ke EKSEKUSI_ASET
+	creatorHomebaseBudget, err := GetUserActiveHomebase(transaction.CreatedBy)
+	if err == nil {
+		if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageProsesBudget, creatorHomebaseBudget.Branch.BranchCode); err != nil {
+			return nil, err
+		}
+	}
+
 	// Kumpulkan semua branch unik dari items dan details
 	branchSet := make(map[string]bool)
 
@@ -364,6 +385,14 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 
 	if transaction.CurrentStage != models.StageEksekusiAset {
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageEksekusiAset)
+	}
+
+	// Cek attachment EKSEKUSI_ASET sebelum generate asset
+	creatorHomebaseExec, err := GetUserActiveHomebase(transaction.CreatedBy)
+	if err == nil {
+		if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageEksekusiAset, creatorHomebaseExec.Branch.BranchCode); err != nil {
+			return nil, err
+		}
 	}
 
 	// Ambil hanya items yang verified sebagai ASSET (is_active = true)

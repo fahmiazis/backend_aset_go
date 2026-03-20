@@ -14,6 +14,37 @@ import (
 )
 
 // ============================================================
+// ATTACHMENT VALIDATION HELPER
+// ============================================================
+
+// checkAttachmentCanProceed validasi semua required attachment sudah APPROVED
+// sebelum bisa transisi ke stage berikutnya
+func checkAttachmentCanProceed(transactionNumber, transactionType, stage, branchCode string) error {
+	summary, err := GetAttachmentStatusSummary(transactionNumber, transactionType, stage, branchCode)
+	if err != nil {
+		return fmt.Errorf("failed to check attachment status: %w", err)
+	}
+
+	if !summary.CanProceed {
+		if len(summary.MissingRequired) > 0 {
+			missing := make([]string, len(summary.MissingRequired))
+			for i, m := range summary.MissingRequired {
+				missing[i] = m.AttachmentType
+			}
+			return fmt.Errorf("required attachments not yet uploaded: %v", missing)
+		}
+		if summary.TotalRejected > 0 {
+			return fmt.Errorf("there are %d rejected attachment(s), please re-upload or reject the transaction", summary.TotalRejected)
+		}
+		if summary.TotalPending > 0 {
+			return fmt.Errorf("there are %d attachment(s) still pending review", summary.TotalPending)
+		}
+	}
+
+	return nil
+}
+
+// ============================================================
 // STAGE HELPERS
 // ============================================================
 
@@ -292,7 +323,7 @@ func GetProcurementDetailWithStage(transactionNumber string) (*dto.ProcurementDe
 				if acq.Asset == nil || acq.AssetID == nil {
 					continue
 				}
-				grStatus := "BELUM_GR"
+				grStatus := "PENDING_RECEIPT"
 				if _, hasGR := grMap[*acq.AssetID]; hasGR {
 					grStatus = "AVAILABLE"
 				}
