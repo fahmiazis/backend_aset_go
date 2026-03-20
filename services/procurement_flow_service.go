@@ -448,7 +448,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 					AssetName:   proc.ItemName,
 					CategoryID:  &category.ID,
 					BranchCode:  &branchCode,
-					AssetStatus: models.AssetStatusBelumGR,
+					AssetStatus: models.AssetStatusPendingReceipt,
 				}
 
 				if err := tx.Create(&asset).Error; err != nil {
@@ -542,7 +542,7 @@ func CreateAssetGR(userID string, userBranchCode string, transactionNumber strin
 		return nil, errors.New("asset number mismatch")
 	}
 
-	if asset.AssetStatus != models.AssetStatusBelumGR {
+	if asset.AssetStatus != models.AssetStatusPendingReceipt {
 		return nil, fmt.Errorf("asset %s has already been received", req.AssetNumber)
 	}
 

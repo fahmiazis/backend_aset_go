@@ -44,8 +44,8 @@ const (
 
 // Asset Status tambahan
 const (
-	AssetStatusBelumGR   = "BELUM_GR"
-	AssetStatusAvailable = "AVAILABLE"
+	AssetStatusPendingReceipt = "PENDING_RECEIPT"
+	AssetStatusAvailable      = "AVAILABLE"
 )
 
 // ============================================================

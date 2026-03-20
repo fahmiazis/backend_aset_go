@@ -59,7 +59,7 @@ func GetProcurementGRStatusDetail(transactionNumber string) (*dto.AssetGRStatusR
 			}
 
 			totalAssets++
-			grStatus := "BELUM_GR"
+			grStatus := "PENDING_RECEIPT"
 			var grDate *string
 			var grBy *string
 
