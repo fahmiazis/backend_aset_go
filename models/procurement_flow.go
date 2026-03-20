@@ -8,14 +8,14 @@ import "time"
 
 // Transaction Stages
 const (
-	StageDraft          = "DRAFT"
-	StageVerifikasiAset = "VERIFIKASI_ASET"
-	StageApproval       = "APPROVAL"
-	StageProsesBudget   = "PROSES_BUDGET"
-	StageEksekusiAset   = "EKSEKUSI_ASET"
-	StageGR             = "GR"
-	StageSelesai        = "SELESAI"
-	StageRejected       = "REJECTED"
+	StageDraft             = "DRAFT"
+	StageAssetVerification = "ASSET_VERIFICATION"
+	StageApproval          = "APPROVAL"
+	StageProcessBudget     = "PROCESS_BUDGET"
+	StageExecuteAsset      = "EXECUTE_ASET"
+	StageGR                = "GR"
+	StageFinished          = "FINISHED"
+	StageRejected          = "REJECTED"
 )
 
 // Stage Actions

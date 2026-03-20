@@ -15,7 +15,7 @@ func GetProcurementGRStatusDetail(transactionNumber string) (*dto.AssetGRStatusR
 	}
 
 	if transaction.CurrentStage != models.StageGR &&
-		transaction.CurrentStage != models.StageSelesai {
+		transaction.CurrentStage != models.StageFinished {
 		return nil, errors.New("transaction is not in GR or SELESAI stage")
 	}
 

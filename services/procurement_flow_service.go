@@ -26,7 +26,7 @@ func SubmitProcurement(userID string, transactionNumber string, req dto.SubmitPr
 		return nil, errors.New("you can only submit your own transactions")
 	}
 
-	if err := validateStageTransition(transaction.CurrentStage, models.StageVerifikasiAset); err != nil {
+	if err := validateStageTransition(transaction.CurrentStage, models.StageAssetVerification); err != nil {
 		return nil, err
 	}
 
@@ -55,13 +55,13 @@ func SubmitProcurement(userID string, transactionNumber string, req dto.SubmitPr
 	}()
 
 	fromStage := transaction.CurrentStage
-	if err := updateTransactionStage(tx, transaction, models.StageVerifikasiAset); err != nil {
+	if err := updateTransactionStage(tx, transaction, models.StageAssetVerification); err != nil {
 		tx.Rollback()
 		return nil, err
 	}
 
 	if err := recordStage(tx, transaction.ID, transactionNumber,
-		fromStage, models.StageVerifikasiAset,
+		fromStage, models.StageAssetVerification,
 		models.ActionSubmit, userID, nil, req.Notes); err != nil {
 		tx.Rollback()
 		return nil, err
@@ -87,8 +87,8 @@ func VerifyProcurement(userID string, branchCode string, transactionNumber strin
 		return nil, err
 	}
 
-	if transaction.CurrentStage != models.StageVerifikasiAset {
-		return nil, fmt.Errorf("transaction is not in %s stage", models.StageVerifikasiAset)
+	if transaction.CurrentStage != models.StageAssetVerification {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageAssetVerification)
 	}
 
 	// Get semua items di transaksi ini
@@ -124,7 +124,7 @@ func VerifyProcurement(userID string, branchCode string, transactionNumber strin
 	}
 
 	// Cek attachment VERIFIKASI_ASET sebelum lanjut ke APPROVAL
-	if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageVerifikasiAset, branchCode); err != nil {
+	if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageAssetVerification, branchCode); err != nil {
 		return nil, err
 	}
 
@@ -244,13 +244,13 @@ func CompleteProcurementApproval(userID string, transactionNumber string) (*dto.
 	}()
 
 	fromStage := transaction.CurrentStage
-	if err := updateTransactionStage(tx, transaction, models.StageProsesBudget); err != nil {
+	if err := updateTransactionStage(tx, transaction, models.StageProcessBudget); err != nil {
 		tx.Rollback()
 		return nil, err
 	}
 
 	if err := recordStage(tx, transaction.ID, transactionNumber,
-		fromStage, models.StageProsesBudget,
+		fromStage, models.StageProcessBudget,
 		models.ActionApprove, userID, nil, nil); err != nil {
 		tx.Rollback()
 		return nil, err
@@ -275,14 +275,14 @@ func ProcessProcurementBudget(userID string, transactionNumber string, req dto.P
 		return nil, err
 	}
 
-	if transaction.CurrentStage != models.StageProsesBudget {
-		return nil, fmt.Errorf("transaction is not in %s stage", models.StageProsesBudget)
+	if transaction.CurrentStage != models.StageProcessBudget {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageProcessBudget)
 	}
 
 	// Cek attachment PROSES_BUDGET sebelum generate IO dan lanjut ke EKSEKUSI_ASET
 	creatorHomebaseBudget, err := GetUserActiveHomebase(transaction.CreatedBy)
 	if err == nil {
-		if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageProsesBudget, creatorHomebaseBudget.Branch.BranchCode); err != nil {
+		if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageProcessBudget, creatorHomebaseBudget.Branch.BranchCode); err != nil {
 			return nil, err
 		}
 	}
@@ -351,13 +351,13 @@ func ProcessProcurementBudget(userID string, transactionNumber string, req dto.P
 	}
 
 	fromStage := transaction.CurrentStage
-	if err := updateTransactionStage(tx, transaction, models.StageEksekusiAset); err != nil {
+	if err := updateTransactionStage(tx, transaction, models.StageExecuteAsset); err != nil {
 		tx.Rollback()
 		return nil, err
 	}
 
 	if err := recordStage(tx, transaction.ID, transactionNumber,
-		fromStage, models.StageEksekusiAset,
+		fromStage, models.StageExecuteAsset,
 		models.ActionProcessBudget, userID, nil, req.Notes); err != nil {
 		tx.Rollback()
 		return nil, err
@@ -383,14 +383,14 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 		return nil, err
 	}
 
-	if transaction.CurrentStage != models.StageEksekusiAset {
-		return nil, fmt.Errorf("transaction is not in %s stage", models.StageEksekusiAset)
+	if transaction.CurrentStage != models.StageExecuteAsset {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageExecuteAsset)
 	}
 
 	// Cek attachment EKSEKUSI_ASET sebelum generate asset
 	creatorHomebaseExec, err := GetUserActiveHomebase(transaction.CreatedBy)
 	if err == nil {
-		if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageEksekusiAset, creatorHomebaseExec.Branch.BranchCode); err != nil {
+		if err := checkAttachmentCanProceed(transactionNumber, TxProcurement, models.StageExecuteAsset, creatorHomebaseExec.Branch.BranchCode); err != nil {
 			return nil, err
 		}
 	}
@@ -547,7 +547,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 // ============================================================
 // STAGE 6: GOOD RECEIPT (GR)
 // GR per item — user branch tujuan
-// Setelah semua item GR → status transaksi = SELESAI
+// Setelah semua item GR → status transaksi = FINISHED
 // ============================================================
 
 func CreateAssetGR(userID string, transactionNumber string, req dto.CreateGRRequest) (*dto.AssetGRResponse, error) {
@@ -660,28 +660,31 @@ func CreateAssetGR(userID string, transactionNumber string, req dto.CreateGRRequ
 	}
 
 	// Cek apakah semua asset di transaksi ini sudah GR
+	// Pakai config.DB (bukan tx) untuk count yang akurat karena GR baru
+	// sudah di-commit via tx.Create di atas
 	var totalAssets int64
-	tx.Model(&models.AssetAcquisition{}).
+	config.DB.Model(&models.AssetAcquisition{}).
 		Where("transaction_id = ?", transaction.ID).
 		Count(&totalAssets)
 
+	// Count dari DB setelah commit GR baru
 	var totalGR int64
-	tx.Model(&models.AssetGR{}).
+	config.DB.Model(&models.AssetGR{}).
 		Where("transaction_id = ?", transaction.ID).
 		Count(&totalGR)
 
-	// +1 karena GR yang baru saja dibuat belum ter-count (masih dalam tx)
-	if totalGR+1 >= totalAssets {
-		// Semua sudah GR → update stage ke SELESAI
+	// +1 karena GR baru belum ter-commit ke DB (masih dalam tx)
+	if totalAssets > 0 && totalGR+1 >= totalAssets {
+		// Semua sudah GR → update stage ke FINISHED
 		fromStage := transaction.CurrentStage
-		if err := updateTransactionStage(tx, transaction, models.StageSelesai); err != nil {
+		if err := updateTransactionStage(tx, transaction, models.StageFinished); err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 
 		notes := "All assets received"
 		if err := recordStage(tx, transaction.ID, transactionNumber,
-			fromStage, models.StageSelesai,
+			fromStage, models.StageFinished,
 			models.ActionGR, userID, nil, &notes); err != nil {
 			tx.Rollback()
 			return nil, err
@@ -698,7 +701,7 @@ func CreateAssetGR(userID string, transactionNumber string, req dto.CreateGRRequ
 
 // ============================================================
 // REJECT
-// Bisa dilakukan di semua stage kecuali DRAFT & SELESAI
+// Bisa dilakukan di semua stage kecuali DRAFT & FINISHED
 // ============================================================
 
 func RejectProcurement(userID string, transactionNumber string, req dto.RejectProcurementRequest) (*dto.ProcurementDetailWithStageResponse, error) {
@@ -708,7 +711,7 @@ func RejectProcurement(userID string, transactionNumber string, req dto.RejectPr
 	}
 
 	if transaction.CurrentStage == models.StageDraft ||
-		transaction.CurrentStage == models.StageSelesai ||
+		transaction.CurrentStage == models.StageFinished ||
 		transaction.CurrentStage == models.StageRejected {
 		return nil, fmt.Errorf("cannot reject transaction in %s stage", transaction.CurrentStage)
 	}
@@ -745,7 +748,7 @@ func RejectProcurement(userID string, transactionNumber string, req dto.RejectPr
 
 // ============================================================
 // REVISI
-// Bisa dilakukan di semua stage kecuali DRAFT, SELESAI, REJECTED
+// Bisa dilakukan di semua stage kecuali DRAFT, FINISHED, REJECTED
 // Kalau stage = APPROVAL → ulang dari APPROVAL
 // Kalau stage lain → langsung ke stage tersebut
 // ============================================================
@@ -759,7 +762,7 @@ func ReviseProcurement(userID string, transactionNumber string, req dto.RevisePr
 	// Validasi stage yang boleh direvisi
 	nonRevisableStages := []string{
 		models.StageDraft,
-		models.StageSelesai,
+		models.StageFinished,
 		models.StageRejected,
 	}
 	for _, s := range nonRevisableStages {

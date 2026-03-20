@@ -968,13 +968,13 @@ func autoCompleteProcurementApproval(userID, transactionNumber, transactionType 
 	}()
 
 	fromStage := transaction.CurrentStage
-	if err := updateTransactionStage(tx, transaction, models.StageProsesBudget); err != nil {
+	if err := updateTransactionStage(tx, transaction, models.StageProcessBudget); err != nil {
 		tx.Rollback()
 		return err
 	}
 
 	if err := recordStage(tx, transaction.ID, transactionNumber,
-		fromStage, models.StageProsesBudget,
+		fromStage, models.StageProcessBudget,
 		models.ActionApprove, userID, nil, nil); err != nil {
 		tx.Rollback()
 		return err
@@ -997,7 +997,7 @@ func autoRejectTransaction(userID, transactionNumber, transactionType, notes str
 
 	// Kalau sudah REJECTED atau SELESAI, skip
 	if transaction.CurrentStage == models.StageRejected ||
-		transaction.CurrentStage == models.StageSelesai {
+		transaction.CurrentStage == models.StageFinished {
 		return nil
 	}
 

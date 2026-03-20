@@ -72,14 +72,14 @@ func recordStage(tx *gorm.DB, transactionID uint, transactionNumber, fromStage, 
 
 // stageToStatus mapping stage ke status transaksi
 var stageToStatus = map[string]string{
-	models.StageDraft:          models.TransactionStatusDraft,
-	models.StageVerifikasiAset: "PENDING",
-	models.StageApproval:       "PENDING",
-	models.StageProsesBudget:   "PROCESSING",
-	models.StageEksekusiAset:   "PROCESSING",
-	models.StageGR:             "PROCESSING",
-	models.StageSelesai:        models.TransactionStatusApproved,
-	models.StageRejected:       models.TransactionStatusRejected,
+	models.StageDraft:             models.TransactionStatusDraft,
+	models.StageAssetVerification: "PENDING",
+	models.StageApproval:          "PENDING",
+	models.StageProcessBudget:     "PROCESSING",
+	models.StageExecuteAsset:      "PROCESSING",
+	models.StageGR:                "PROCESSING",
+	models.StageFinished:          models.TransactionStatusApproved,
+	models.StageRejected:          models.TransactionStatusRejected,
 }
 
 // updateTransactionStage update current_stage & status di tabel transactions
@@ -98,12 +98,12 @@ func updateTransactionStage(tx *gorm.DB, transaction *models.Transaction, toStag
 // validateStageTransition memastikan perpindahan stage valid
 func validateStageTransition(currentStage, targetStage string) error {
 	validTransitions := map[string][]string{
-		models.StageDraft:          {models.StageVerifikasiAset, models.StageRejected},
-		models.StageVerifikasiAset: {models.StageApproval, models.StageRejected},
-		models.StageApproval:       {models.StageProsesBudget, models.StageRejected},
-		models.StageProsesBudget:   {models.StageEksekusiAset, models.StageRejected},
-		models.StageEksekusiAset:   {models.StageGR, models.StageRejected},
-		models.StageGR:             {models.StageSelesai},
+		models.StageDraft:             {models.StageAssetVerification, models.StageRejected},
+		models.StageAssetVerification: {models.StageApproval, models.StageRejected},
+		models.StageApproval:          {models.StageProcessBudget, models.StageRejected},
+		models.StageProcessBudget:     {models.StageExecuteAsset, models.StageRejected},
+		models.StageExecuteAsset:      {models.StageGR, models.StageRejected},
+		models.StageGR:                {models.StageFinished},
 	}
 
 	allowed, ok := validTransitions[currentStage]
