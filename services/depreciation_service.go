@@ -205,9 +205,12 @@ func CalculateMonthlyDepreciation(userID string, req dto.CalculateDepreciationRe
 		return errors.New("invalid period format, use YYYY-MM")
 	}
 
-	// Get all active assets
+	// Get all active assets yang siap didepresiasi
+	// Status ACTIVE (asset lama) atau AVAILABLE (asset baru setelah GR)
 	var assets []models.Asset
-	if err := config.DB.Where("asset_status = ?", models.AssetStatusActive).Find(&assets).Error; err != nil {
+	if err := config.DB.
+		Where("asset_status IN ?", []string{models.AssetStatusActive, models.AssetStatusAvailable}).
+		Find(&assets).Error; err != nil {
 		return err
 	}
 
