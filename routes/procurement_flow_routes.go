@@ -56,7 +56,7 @@ func SetupProcurementFlowRoutes(rg *gin.RouterGroup) {
 
 		// GR per item
 		procurement.POST("/gr",
-			middleware.RequirePermission("create_transaction"),
+			middleware.RequirePermission("create_transaction", "gr"),
 			controllers.CreateAssetGR)
 
 		// REJECT

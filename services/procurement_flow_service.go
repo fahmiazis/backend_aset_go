@@ -353,7 +353,7 @@ func ProcessProcurementBudget(userID string, transactionNumber string, req dto.P
 // STAGE 5: EKSEKUSI ASET
 // EKSEKUSI_ASET → GR
 // PIC Asset generate nomor asset & create asset records
-// Asset status = BELUM_GR
+// Asset status = PENDING_RECEIPT
 // ============================================================
 
 func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.ExecuteAssetRequest) (*dto.ProcurementDetailWithStageResponse, error) {
@@ -519,7 +519,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 // Setelah semua item GR → status transaksi = SELESAI
 // ============================================================
 
-func CreateAssetGR(userID string, userBranchCode string, transactionNumber string, req dto.CreateGRRequest) (*dto.AssetGRResponse, error) {
+func CreateAssetGR(userID string, transactionNumber string, req dto.CreateGRRequest) (*dto.AssetGRResponse, error) {
 	transaction, err := getProcurementTransaction(transactionNumber)
 	if err != nil {
 		return nil, err
@@ -529,7 +529,7 @@ func CreateAssetGR(userID string, userBranchCode string, transactionNumber strin
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageGR)
 	}
 
-	// Validasi asset ada dan milik transaksi ini
+	// Validasi asset ada
 	var asset models.Asset
 	if err := config.DB.First(&asset, req.AssetID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -546,9 +546,19 @@ func CreateAssetGR(userID string, userBranchCode string, transactionNumber strin
 		return nil, fmt.Errorf("asset %s has already been received", req.AssetNumber)
 	}
 
-	// Validasi user dari branch yang sesuai dengan asset branch
-	if asset.BranchCode == nil || *asset.BranchCode != userBranchCode {
-		return nil, errors.New("you can only do GR for assets in your branch")
+	// Validasi branch — branch asset harus sama dengan homebase user
+	// Hanya user yang homebase-nya di branch tujuan asset yang bisa GR
+	if asset.BranchCode == nil {
+		return nil, errors.New("asset has no branch assigned")
+	}
+
+	homebase, err := GetUserActiveHomebase(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user homebase: %w", err)
+	}
+
+	if homebase.Branch.BranchCode != *asset.BranchCode {
+		return nil, fmt.Errorf("you can only do GR for assets in your homebase branch (%s)", homebase.Branch.BranchCode)
 	}
 
 	grDate, err := time.Parse("2006-01-02", req.GRDate)
@@ -571,7 +581,7 @@ func CreateAssetGR(userID string, userBranchCode string, transactionNumber strin
 		TransactionNumber: transactionNumber,
 		AssetID:           asset.ID,
 		AssetNumber:       asset.AssetNumber,
-		BranchCode:        userBranchCode,
+		BranchCode:        *asset.BranchCode,
 		GRDate:            grDate,
 		GRBy:              userID,
 		GRAt:              now,

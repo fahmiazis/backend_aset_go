@@ -177,7 +177,6 @@ func ExecuteProcurementAsset(c *gin.Context) {
 
 func CreateAssetGR(c *gin.Context) {
 	userID := c.GetString("user_id")
-	userBranchCode := c.GetString("branch_code")
 	transactionNumber := c.Query("transaction_number")
 	if transactionNumber == "" {
 		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
@@ -190,7 +189,7 @@ func CreateAssetGR(c *gin.Context) {
 		return
 	}
 
-	result, err := services.CreateAssetGR(userID, userBranchCode, transactionNumber, req)
+	result, err := services.CreateAssetGR(userID, transactionNumber, req)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
