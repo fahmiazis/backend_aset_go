@@ -36,11 +36,11 @@ func SetupProcurementFlowRoutes(rg *gin.RouterGroup) {
 			controllers.VerifyProcurement)
 
 		// APPROVAL
-		procurement.POST("/initiate-approval",
+		procurement.POST("/approval/initiate",
 			middleware.RequirePermission("manage_approval"),
 			controllers.InitiateProcurementApproval)
 
-		procurement.POST("/complete-approval",
+		procurement.POST("/approval/complete",
 			middleware.RequirePermission("manage_approval"),
 			controllers.CompleteProcurementApproval)
 
