@@ -8,6 +8,7 @@ import "time"
 
 type CreateApprovalFlowRequest struct {
 	FlowCode            string   `json:"flow_code" binding:"required,min=2,max=50"`
+	BranchCode          string   `json:"branch_code"`
 	FlowName            string   `json:"flow_name" binding:"required,min=2,max=100"`
 	ApprovalWay         string   `json:"approval_way" binding:"required,oneof=sequential parallel conditional"`
 	AssignmentType      string   `json:"assignment_type" binding:"required,oneof=general user_specific"`
@@ -24,6 +25,7 @@ type CreateApprovalFlowRequest struct {
 
 type UpdateApprovalFlowRequest struct {
 	FlowCode            string   `json:"flow_code" binding:"omitempty,min=2,max=50"`
+	BranchCode          string   `json:"branch_code"`
 	FlowName            string   `json:"flow_name" binding:"omitempty,min=2,max=100"`
 	ApprovalWay         string   `json:"approval_way" binding:"omitempty,oneof=sequential parallel conditional"`
 	AssignmentType      string   `json:"assignment_type" binding:"omitempty,oneof=general user_specific"`
@@ -37,6 +39,7 @@ type UpdateApprovalFlowRequest struct {
 type ApprovalFlowResponse struct {
 	ID                  string  `json:"id"`
 	FlowCode            string  `json:"flow_code"`
+	BranchCode          string  `json:"branch_code"`
 	FlowName            string  `json:"flow_name"`
 	ApprovalWay         string  `json:"approval_way"`
 	AssignmentType      string  `json:"assignment_type"`

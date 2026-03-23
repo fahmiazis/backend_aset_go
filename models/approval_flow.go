@@ -7,31 +7,28 @@ import (
 	"gorm.io/gorm"
 )
 
-// ApprovalFlow defines the approval workflow template
-// Can be:
-// - Master template (is_custom = false, created by admin)
-// - User custom flow (is_custom = true, created by user, needs verification)
 type ApprovalFlow struct {
 	ID          string `gorm:"type:char(36);primaryKey" json:"id"`
-	FlowCode    string `gorm:"type:varchar(50);uniqueIndex;not null" json:"flow_code"`
+	FlowCode    string `gorm:"type:varchar(50);not null;uniqueIndex:uq_flow_code_branch" json:"flow_code"`
+	BranchCode  string `gorm:"type:varchar(50);not null;default:ALL;uniqueIndex:uq_flow_code_branch" json:"branch_code"` // ADD
 	FlowName    string `gorm:"type:varchar(100);not null" json:"flow_name"`
 	ApprovalWay string `gorm:"type:enum('sequential','parallel','conditional');default:'sequential'" json:"approval_way"`
 
 	// Assignment System
-	AssignmentType string  `gorm:"type:enum('general','user_specific');default:'general'" json:"assignment_type"` // general: all users, user_specific: specific user
-	AssignedUserID *string `gorm:"type:char(36)" json:"assigned_user_id"`                                         // If user_specific, which user
+	AssignmentType string  `gorm:"type:enum('general','user_specific');default:'general'" json:"assignment_type"`
+	AssignedUserID *string `gorm:"type:char(36)" json:"assigned_user_id"`
 
 	// Customization Control
-	IsCustomizable      bool    `gorm:"type:boolean;default:false" json:"is_customizable"` // Can users customize this flow?
-	AllowedCreatorRoles *string `gorm:"type:json" json:"allowed_creator_roles"`            // JSON array of role IDs allowed to customize
+	IsCustomizable      bool    `gorm:"type:boolean;default:false" json:"is_customizable"`
+	AllowedCreatorRoles *string `gorm:"type:json" json:"allowed_creator_roles"`
 
 	// Custom Flow Tracking
-	IsCustom     bool    `gorm:"type:boolean;default:false" json:"is_custom"`                                          // Is this a custom flow created by user?
-	CreatedBy    *string `gorm:"type:char(36)" json:"created_by"`                                                      // User who created this (NULL if admin/system)
-	BaseFlowID   *string `gorm:"type:char(36)" json:"base_flow_id"`                                                    // Reference to master flow if custom
-	CustomStatus *string `gorm:"type:enum('draft','pending_verification','approved','rejected')" json:"custom_status"` // Status if custom
+	IsCustom     bool    `gorm:"type:boolean;default:false" json:"is_custom"`
+	CreatedBy    *string `gorm:"type:char(36)" json:"created_by"`
+	BaseFlowID   *string `gorm:"type:char(36)" json:"base_flow_id"`
+	CustomStatus *string `gorm:"type:enum('draft','pending_verification','approved','rejected')" json:"custom_status"`
 
-	// Verification (for custom flows)
+	// Verification
 	VerifiedBy        *string    `gorm:"type:char(36)" json:"verified_by"`
 	VerifiedAt        *time.Time `json:"verified_at"`
 	VerificationNotes *string    `gorm:"type:text" json:"verification_notes"`

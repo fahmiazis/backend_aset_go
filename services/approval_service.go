@@ -53,18 +53,52 @@ func GetApprovalFlowByID(id string) (*dto.ApprovalFlowResponse, error) {
 	return &response, nil
 }
 
+// GetApprovalFlowByCode - backward compatible, pakai ALL sebagai branch
 func GetApprovalFlowByCode(code string) (*dto.ApprovalFlowResponse, error) {
+	return GetApprovalFlowByCodeAndBranch(code, "ALL")
+}
+
+// GetApprovalFlowByCodeAndBranch - lookup dengan fallback:
+// 1. flow_code + branch_code spesifik
+// 2. flow_code + branch_code = ALL (fallback)
+func GetApprovalFlowByCodeAndBranch(code string, branchCode string) (*dto.ApprovalFlowResponse, error) {
 	var flow models.ApprovalFlow
 
-	if err := config.DB.
-		Preload("FlowSteps", func(db *gorm.DB) *gorm.DB {
-			return db.Order("step_order ASC")
-		}).
+	preloadFn := func(db *gorm.DB) *gorm.DB {
+		return db.Order("step_order ASC")
+	}
+
+	// Coba cari yang spesifik dulu (bukan ALL)
+	if branchCode != "ALL" && branchCode != "" {
+		err := config.DB.
+			Preload("FlowSteps", preloadFn).
+			Preload("FlowSteps.Role").
+			Preload("FlowSteps.Branch").
+			Where("flow_code = ? AND branch_code = ? AND is_active = ?", code, branchCode, true).
+			First(&flow).Error
+
+		if err == nil {
+			response := mapApprovalFlowToResponse(flow)
+			return &response, nil
+		}
+
+		// Kalau tidak ketemu yang spesifik, lanjut ke fallback ALL
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+
+	// Fallback ke ALL
+	err := config.DB.
+		Preload("FlowSteps", preloadFn).
 		Preload("FlowSteps.Role").
 		Preload("FlowSteps.Branch").
-		First(&flow, "flow_code = ?", code).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, errors.New("approval flow not found")
+		Where("flow_code = ? AND branch_code = ? AND is_active = ?", code, "ALL", true).
+		First(&flow).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("approval flow '%s' not found for branch '%s' or ALL", code, branchCode)
 		}
 		return nil, err
 	}
@@ -122,6 +156,9 @@ func UpdateApprovalFlow(id string, req dto.UpdateApprovalFlowRequest) (*dto.Appr
 
 	if req.FlowCode != "" {
 		updates["flow_code"] = req.FlowCode
+	}
+	if req.BranchCode != "" {
+		updates["branch_code"] = req.BranchCode
 	}
 	if req.FlowName != "" {
 		updates["flow_name"] = req.FlowName
@@ -714,6 +751,7 @@ func mapApprovalFlowToResponse(flow models.ApprovalFlow) dto.ApprovalFlowRespons
 	response := dto.ApprovalFlowResponse{
 		ID:                  flow.ID,
 		FlowCode:            flow.FlowCode,
+		BranchCode:          flow.BranchCode,
 		FlowName:            flow.FlowName,
 		ApprovalWay:         flow.ApprovalWay,
 		AssignmentType:      flow.AssignmentType,

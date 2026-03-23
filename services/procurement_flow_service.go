@@ -195,10 +195,16 @@ func InitiateProcurementApproval(userID string, transactionNumber string, req dt
 	}
 
 	// Auto-lookup flow by code PROCUREMENT_APPROVAL
-	// Tidak perlu input flow_id manual dari user
-	flow, err := GetApprovalFlowByCode("PROCUREMENT_APPROVAL")
+	// Cari berdasarkan branch creator dulu, fallback ke ALL
+	creatorHomebase, homebaseErr := GetUserActiveHomebase(transaction.CreatedBy)
+	branchCode := "ALL"
+	if homebaseErr == nil {
+		branchCode = creatorHomebase.Branch.BranchCode
+	}
+
+	flow, err := GetApprovalFlowByCodeAndBranch("PROCUREMENT_APPROVAL", branchCode)
 	if err != nil {
-		return fmt.Errorf("approval flow PROCUREMENT_APPROVAL not found, please configure it first")
+		return fmt.Errorf("approval flow PROCUREMENT_APPROVAL not found for branch %s or ALL, please configure it first", branchCode)
 	}
 
 	if !flow.IsActive {
@@ -472,13 +478,13 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 				}
 
 				branchCode := bq.BranchCode
-				ioNum := ioNumberMap[branchCode]
+				assetIONum := ioNumberMap[branchCode]
 				asset := models.Asset{
 					AssetNumber: assetNumber,
 					AssetName:   proc.ItemName,
 					CategoryID:  &category.ID,
 					BranchCode:  &branchCode,
-					IONumber:    &ioNum, // *string
+					IONumber:    &assetIONum, // *string
 					AssetStatus: models.AssetStatusPendingReceipt,
 				}
 
@@ -496,7 +502,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 				assetID := asset.ID
 				procID := proc.ID
 				// Ambil IO number sesuai branch asset
-				AssetioNum := ioNumberMap[branchCode]
+				ioNum := ioNumberMap[branchCode]
 				acquisition := models.AssetAcquisition{
 					DocumentNumber:           documentNumber,
 					AssetID:                  &assetID,
@@ -508,7 +514,7 @@ func ExecuteProcurementAsset(userID string, transactionNumber string, req dto.Ex
 					AcquisitionValue:         proc.UnitPrice,
 					CategoryID:               &category.ID,
 					BranchCode:               branchCode,
-					IONumber:                 AssetioNum, // IO number sesuai branch
+					IONumber:                 ioNum, // IO number sesuai branch
 					Status:                   "DRAFT",
 					CreatedBy:                userID,
 				}
