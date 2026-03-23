@@ -17,13 +17,16 @@ func SetupAttachmentRoutes(rg *gin.RouterGroup) {
 		configs.GET("", controllers.GetAttachmentConfigs)
 		configs.GET("/:id", controllers.GetAttachmentConfigByID)
 		configs.POST("",
-			middleware.RequirePermission("manage_attachment_config"),
+			// middleware.RequirePermission("manage_attachment_config"),
+			middleware.RequireRole("admin"),
 			controllers.CreateAttachmentConfig)
 		configs.PUT("/:id",
-			middleware.RequirePermission("manage_attachment_config"),
+			// middleware.RequirePermission("manage_attachment_config"),
+			middleware.RequireRole("admin"),
 			controllers.UpdateAttachmentConfig)
 		configs.DELETE("/:id",
-			middleware.RequirePermission("manage_attachment_config"),
+			// middleware.RequirePermission("manage_attachment_config"),
+			middleware.RequireRole("admin"),
 			controllers.DeleteAttachmentConfig)
 	}
 
