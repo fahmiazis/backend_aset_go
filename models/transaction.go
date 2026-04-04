@@ -4,19 +4,21 @@ import "time"
 
 // UPDATE: tambah CurrentStage dan IONumber
 type Transaction struct {
-	ID                uint       `gorm:"primaryKey" json:"id"`
-	TransactionNumber string     `gorm:"size:100;uniqueIndex;not null" json:"transaction_number"`
-	TransactionType   string     `gorm:"size:50;not null;index" json:"transaction_type"`
-	TransactionDate   time.Time  `gorm:"type:date;not null;index" json:"transaction_date"`
-	Status            string     `gorm:"size:50;not null;default:DRAFT;index" json:"status"`
-	CurrentStage      string     `gorm:"size:50;not null;default:DRAFT;index" json:"current_stage"` // ADD
-	IONumber          *string    `gorm:"size:50" json:"io_number"`                                  // ADD
-	Notes             *string    `gorm:"type:text" json:"notes"`
-	CreatedBy         string     `gorm:"size:100" json:"created_by"`
-	ApprovedBy        *string    `gorm:"size:100" json:"approved_by"`
-	ApprovedAt        *time.Time `json:"approved_at"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID                   uint       `gorm:"primaryKey" json:"id"`
+	TransactionNumber    string     `gorm:"size:100;uniqueIndex;not null" json:"transaction_number"`
+	TransactionType      string     `gorm:"size:50;not null;index" json:"transaction_type"`
+	TransactionDate      time.Time  `gorm:"type:date;not null;index" json:"transaction_date"`
+	Status               string     `gorm:"size:50;not null;default:DRAFT;index" json:"status"`
+	CurrentStage         string     `gorm:"size:50;not null;default:DRAFT;index" json:"current_stage"` // ADD
+	IONumber             *string    `gorm:"size:50" json:"io_number"`                                  // ADD
+	MutationCategoryID   *uint      `gorm:"index" json:"mutation_category_id"`
+	MutationToBranchCode *string    `gorm:"size:50;index" json:"mutation_to_branch_code"`
+	Notes                *string    `gorm:"type:text" json:"notes"`
+	CreatedBy            string     `gorm:"size:100" json:"created_by"`
+	ApprovedBy           *string    `gorm:"size:100" json:"approved_by"`
+	ApprovedAt           *time.Time `json:"approved_at"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 
 	// Relations to Transaction Details
 	TransactionProcurements []TransactionProcurement `gorm:"foreignKey:TransactionID" json:"transaction_procurements,omitempty"`

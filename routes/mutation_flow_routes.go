@@ -1,0 +1,83 @@
+package routes
+
+import (
+	"backend-go/controllers"
+	"backend-go/middleware"
+
+	"github.com/gin-gonic/gin"
+)
+
+func SetupMutationFlowRoutes(rg *gin.RouterGroup) {
+	mutation := rg.Group("/transactions/mutation")
+	mutation.Use(middleware.AuthMiddleware())
+	{
+		// ============================================================
+		// DRAFT MANAGEMENT
+		// ============================================================
+
+		// POST   /transactions/mutation                          → create draft
+		// GET    /transactions/mutation                          → list semua mutasi user
+		// GET    /transactions/mutation/detail?transaction_number → detail + assets + stages
+		mutation.POST("",
+			middleware.RequirePermission("create_transaction"),
+			controllers.CreateMutationDraft)
+
+		mutation.GET("", controllers.GetAllMutations)
+
+		mutation.GET("/detail", controllers.GetMutationDetail)
+
+		// POST /transactions/mutation/add-asset?transaction_number → tambah asset ke draft
+		// DELETE /transactions/mutation/remove-asset?transaction_number → hapus asset dari draft
+		mutation.POST("/add-asset",
+			middleware.RequirePermission("create_transaction"),
+			controllers.AddAssetToMutation)
+
+		mutation.DELETE("/remove-asset",
+			middleware.RequirePermission("create_transaction"),
+			controllers.RemoveAssetFromMutation)
+
+		// ============================================================
+		// FLOW ACTIONS
+		// ============================================================
+
+		// POST /transactions/mutation/submit?transaction_number → DRAFT → APPROVAL
+		mutation.POST("/submit",
+			middleware.RequirePermission("create_transaction"),
+			controllers.SubmitMutation)
+
+		// POST /transactions/mutation/initiate-approval?transaction_number → trigger approval
+		mutation.POST("/initiate-approval",
+			middleware.RequirePermission("manage_approval"),
+			controllers.InitiateMutationApproval)
+
+		// GET  /transactions/mutation/approval-status?transaction_number → status approval
+		mutation.GET("/approval-status", controllers.GetMutationApprovalStatus)
+
+		// POST /transactions/mutation/execute?transaction_number → APPROVAL → FINISHED
+		mutation.POST("/execute",
+			middleware.RequirePermission("execute_mutation"),
+			controllers.ExecuteMutation)
+
+		// POST /transactions/mutation/reject?transaction_number → REJECTED
+		mutation.POST("/reject",
+			middleware.RequirePermission("reject_transaction"),
+			controllers.RejectMutation)
+
+		// ============================================================
+		// ATTACHMENT PER ASSET
+		// ============================================================
+
+		// POST   /transactions/mutation/attachments/upload?transaction_number → upload per asset
+		// PUT    /transactions/mutation/attachments/:id/review → approve/reject
+		// GET    /transactions/mutation/attachments/status?transaction_number → status semua asset
+		mutation.POST("/attachments/upload",
+			middleware.RequirePermission("upload_attachment", "create_transaction"),
+			controllers.UploadMutationAttachment)
+
+		mutation.PUT("/attachments/:id/review",
+			middleware.RequirePermission("review_attachment"),
+			controllers.ReviewMutationAttachment)
+
+		mutation.GET("/attachments/status", controllers.GetMutationAttachmentStatus)
+	}
+}
