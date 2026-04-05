@@ -542,9 +542,12 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 
 	// Auto-trigger complete approval jika semua step sudah approved
 	if err := autoCompleteProcurementApproval(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
-		// Log error tapi tidak return error — approval tetap berhasil
-		// Complete approval bisa di-trigger manual jika auto gagal
-		fmt.Printf("auto complete approval warning: %v\n", err)
+		fmt.Printf("auto complete procurement approval warning: %v\n", err)
+	}
+
+	// Auto-trigger untuk mutasi
+	if err := autoCompleteMutationApproval(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
+		fmt.Printf("auto complete mutation approval warning: %v\n", err)
 	}
 
 	return nil
@@ -601,12 +604,6 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 		return err
 	}
 
-	notes := ""
-
-	if req.Notes != nil {
-		notes = *req.Notes
-	}
-
 	// Create signature record
 	signature := models.ApprovalSignature{
 		TransactionNumber: approval.TransactionNumber,
@@ -625,7 +622,7 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 	}
 
 	// Auto-reject transaksi jika approval di-reject
-	if err := autoRejectTransaction(userID, approval.TransactionNumber, approval.TransactionType, notes); err != nil {
+	if err := autoRejectTransaction(userID, approval.TransactionNumber, approval.TransactionType, *req.Notes); err != nil {
 		fmt.Printf("auto reject transaction warning: %v\n", err)
 	}
 
@@ -930,7 +927,7 @@ func mapTransactionApprovalsToResponse(approvals []models.TransactionApproval) [
 // }
 
 func validateApproverBranch(approverUserID, transactionNumber, transactionType string) error {
-	// Ambil transaksi
+	// Ambil transaksi untuk dapat CreatedBy
 	var transaction models.Transaction
 	if err := config.DB.
 		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
@@ -941,29 +938,30 @@ func validateApproverBranch(approverUserID, transactionNumber, transactionType s
 		return err
 	}
 
-	// Ambil homebase creator (pakai function lu yang udah ada)
+	// Ambil homebase creator transaksi
 	creatorHomebase, err := GetUserActiveHomebase(transaction.CreatedBy)
 	if err != nil {
-		return fmt.Errorf("failed to get creator homebase: %w", err)
+		return fmt.Errorf("failed to get transaction creator homebase: %w", err)
 	}
+	creatorBranchCode := creatorHomebase.Branch.BranchCode
 
-	// Ambil semua branch approver
-	approverBranches, err := GetUserBranchs(approverUserID)
-	if err != nil {
+	// Ambil semua branch yang dimiliki approver (semua tipe: homebase, temporary, assignment)
+	var approverBranches []models.UserBranch
+	if err := config.DB.
+		Preload("Branch").
+		Where("user_id = ?", approverUserID).
+		Find(&approverBranches).Error; err != nil {
 		return fmt.Errorf("failed to get approver branches: %w", err)
 	}
 
-	// Cek apakah branch creator ada di branch approver
-	for _, branch := range approverBranches {
-		if branch.BranchCode == creatorHomebase.Branch.BranchCode {
-			return nil
+	// Cek apakah branch creator ada di list branch approver
+	for _, ub := range approverBranches {
+		if ub.Branch != nil && ub.Branch.BranchCode == creatorBranchCode {
+			return nil // valid
 		}
 	}
 
-	return fmt.Errorf(
-		"you can only approve transactions from branch %s",
-		creatorHomebase.Branch.BranchCode,
-	)
+	return fmt.Errorf("you do not have access to approve transactions from branch %s", creatorBranchCode)
 }
 
 // autoCompleteProcurementApproval auto-trigger complete approval
@@ -1033,7 +1031,7 @@ func autoRejectTransaction(userID, transactionNumber, transactionType, notes str
 		return err
 	}
 
-	// Kalau sudah REJECTED atau SELESAI, skip
+	// Kalau sudah REJECTED atau FINISHED, skip
 	if transaction.CurrentStage == models.StageRejected ||
 		transaction.CurrentStage == models.StageFinished {
 		return nil

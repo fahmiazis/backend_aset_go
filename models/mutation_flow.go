@@ -10,7 +10,7 @@ const (
 	StageMutationDraft    = "DRAFT"
 	StageMutationSubmit   = "SUBMITTED"
 	StageMutationApproval = "APPROVAL"
-	StageMutationExecute  = "EXECUTE"
+	StageMutationExecute  = "EXECUTE_MUTATION"
 	StageMutationFinished = "FINISHED"
 	StageMutationRejected = "REJECTED"
 )

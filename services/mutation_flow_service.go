@@ -391,17 +391,10 @@ func ExecuteMutation(userID string, transactionNumber string, req dto.ExecuteMut
 		return nil, err
 	}
 
-	if transaction.CurrentStage != models.StageApproval {
-		return nil, fmt.Errorf("transaction is not in %s stage — must be approved first", models.StageApproval)
-	}
-
-	// Cek semua approval sudah approved
-	approvalSummary, err := GetTransactionApprovalStatus(transactionNumber, TxMutationFlow)
-	if err != nil {
-		return nil, err
-	}
-	if approvalSummary.Status != "approved" {
-		return nil, errors.New("not all approval steps have been approved")
+	// Hanya bisa dieksekusi kalau sudah di stage EXECUTE_MUTATION
+	// (otomatis masuk sini setelah semua approval step approved)
+	if transaction.CurrentStage != models.StageMutationExecute {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageMutationExecute)
 	}
 
 	// Ambil semua asset di mutasi ini
@@ -927,7 +920,8 @@ func mapMutationAttachmentToResponse(att models.TransactionMutationAttachment) d
 }
 
 // autoCompleteMutationApproval — dipanggil otomatis setelah approve step
-// Kalau semua step approved → langsung EXECUTE
+// Kalau semua step approved → pindah stage ke EXECUTE_MUTATION
+// Eksekusi dilakukan manual oleh PIC Asset yang berwenang
 func autoCompleteMutationApproval(userID, transactionNumber, transactionType string) error {
 	if transactionType != TxMutationFlow {
 		return nil
@@ -946,8 +940,34 @@ func autoCompleteMutationApproval(userID, transactionNumber, transactionType str
 		return nil
 	}
 
-	// Semua approved — langsung eksekusi
-	req := dto.ExecuteMutationRequest{}
-	_, err := ExecuteMutation(userID, transactionNumber, req)
-	return err
+	transaction, err := getMutationTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	if transaction.CurrentStage != models.StageApproval {
+		return nil
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageMutationExecute); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageMutationExecute,
+		models.ActionApprove, userID, nil, nil); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit().Error
 }
