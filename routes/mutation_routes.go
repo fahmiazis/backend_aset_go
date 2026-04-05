@@ -8,7 +8,7 @@ import (
 )
 
 func SetupMutationRoutes(rg *gin.RouterGroup) {
-	mutation := rg.Group("/transactions/mutation")
+	mutation := rg.Group("/mutation")
 	mutation.Use(middleware.AuthMiddleware())
 	{
 		mutation.POST("",
