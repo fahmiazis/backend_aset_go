@@ -49,13 +49,16 @@ func SetupMutationFlowRoutes(rg *gin.RouterGroup) {
 		// FLOW ACTIONS
 		// ============================================================
 
-		// POST /transactions/mutation/initiate-approval?transaction_number → trigger approval
-		mutation.POST("/initiate-approval",
-			middleware.RequirePermission("manage_approval"),
-			controllers.InitiateMutationApproval)
+		mutationApproval := mutation.Group("/approval")
+		{
+			// POST /transactions/mutation/approval/initiate-approval?transaction_number → trigger approval
+			mutationApproval.POST("/initiate",
+				middleware.RequirePermission("manage_approval"),
+				controllers.InitiateMutationApproval)
 
-		// GET  /transactions/mutation/approval-status?transaction_number → status approval
-		mutation.GET("/approval-status", controllers.GetMutationApprovalStatus)
+			// GET  /transactions/mutation/approval/approval-status?transaction_number → status approval
+			mutation.GET("/status", controllers.GetMutationApprovalStatus)
+		}
 
 		// POST /transactions/mutation/execute?transaction_number → APPROVAL → FINISHED
 		mutation.POST("/execute",
