@@ -28,7 +28,6 @@ type Asset struct {
 func (Asset) TableName() string { return "assets" }
 
 const (
-	AssetStatusActive      = "ACTIVE"
 	AssetStatusInactive    = "INACTIVE"
 	AssetStatusMaintenance = "MAINTENANCE"
 	AssetStatusRetired     = "RETIRED"

@@ -135,7 +135,7 @@ func AddAssetToMutation(userID string, transactionNumber string, req dto.AddMuta
 		return nil, errors.New("asset number mismatch")
 	}
 
-	if asset.AssetStatus != models.AssetStatusActive {
+	if asset.AssetStatus != models.AssetStatusAvailable {
 		return nil, fmt.Errorf("asset %s is not available for mutation (status: %s)", req.AssetNumber, asset.AssetStatus)
 	}
 
@@ -263,7 +263,7 @@ func RemoveAssetFromMutation(userID string, transactionNumber string, req dto.Re
 	// Kembalikan asset status → ACTIVE
 	if err := tx.Model(&models.Asset{}).
 		Where("id = ?", req.AssetID).
-		Update("asset_status", models.AssetStatusActive).Error; err != nil {
+		Update("asset_status", models.AssetStatusAvailable).Error; err != nil {
 		tx.Rollback()
 		return nil, err
 	}
@@ -438,7 +438,7 @@ func ExecuteMutation(userID string, transactionNumber string, req dto.ExecuteMut
 			Where("id = ?", ma.AssetID).
 			Updates(map[string]interface{}{
 				"branch_code":  ma.ToBranchCode,
-				"asset_status": models.AssetStatusActive, // kembali ACTIVE di branch baru
+				"asset_status": models.AssetStatusAvailable, // kembali ACTIVE di branch baru
 			}).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to update asset branch: %w", err)
@@ -496,7 +496,7 @@ func RejectMutation(userID string, transactionNumber string, req dto.RejectMutat
 	for _, ma := range mutationAssets {
 		if err := tx.Model(&models.Asset{}).
 			Where("id = ?", ma.AssetID).
-			Update("asset_status", models.AssetStatusActive).Error; err != nil {
+			Update("asset_status", models.AssetStatusAvailable).Error; err != nil {
 			tx.Rollback()
 			return nil, err
 		}

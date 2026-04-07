@@ -209,7 +209,7 @@ func CalculateMonthlyDepreciation(userID string, req dto.CalculateDepreciationRe
 	// Status ACTIVE (asset lama) atau AVAILABLE (asset baru setelah GR)
 	var assets []models.Asset
 	if err := config.DB.
-		Where("asset_status IN ?", []string{models.AssetStatusActive, models.AssetStatusAvailable}).
+		Where("asset_status IN ?", []string{models.AssetStatusAvailable, models.AssetStatusAvailable}).
 		Find(&assets).Error; err != nil {
 		return err
 	}
