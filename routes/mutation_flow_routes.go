@@ -26,24 +26,28 @@ func SetupMutationFlowRoutes(rg *gin.RouterGroup) {
 
 		mutation.GET("/detail", controllers.GetMutationDetail)
 
-		// POST /transactions/mutation/add-asset?transaction_number → tambah asset ke draft
-		// DELETE /transactions/mutation/remove-asset?transaction_number → hapus asset dari draft
-		mutation.POST("/add-asset",
-			middleware.RequirePermission("create_transaction"),
-			controllers.AddAssetToMutation)
+		mutationDraft := mutation.Group("/draft")
+		{
+			// POST /transactions/mutation/draft/add-asset?transaction_number → tambah asset ke draft
+			// DELETE /transactions/mutation/draft/remove-asset?transaction_number → hapus asset dari draft
+			mutationDraft.POST("/add-asset",
+				middleware.RequirePermission("create_transaction"),
+				controllers.AddAssetToMutation)
 
-		mutation.DELETE("/remove-asset",
-			middleware.RequirePermission("create_transaction"),
-			controllers.RemoveAssetFromMutation)
+			mutationDraft.DELETE("/remove-asset",
+				middleware.RequirePermission("create_transaction"),
+				controllers.RemoveAssetFromMutation)
+
+			// POST /transactions/mutation/submit?transaction_number → DRAFT → APPROVAL
+			mutationDraft.POST("/submit",
+				middleware.RequirePermission("create_transaction"),
+				controllers.SubmitMutation)
+
+		}
 
 		// ============================================================
 		// FLOW ACTIONS
 		// ============================================================
-
-		// POST /transactions/mutation/submit?transaction_number → DRAFT → APPROVAL
-		mutation.POST("/submit",
-			middleware.RequirePermission("create_transaction"),
-			controllers.SubmitMutation)
 
 		// POST /transactions/mutation/initiate-approval?transaction_number → trigger approval
 		mutation.POST("/initiate-approval",
