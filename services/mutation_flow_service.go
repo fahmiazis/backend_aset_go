@@ -919,6 +919,69 @@ func mapMutationAttachmentToResponse(att models.TransactionMutationAttachment) d
 	return resp
 }
 
+// ============================================================
+// MUTATION RECEIVING
+// APPROVAL → MUTATION_RECEIVING → EXECUTE_MUTATION
+// Dilakukan oleh user homebase branch tujuan
+// Upload dokumen serah terima per asset
+// ============================================================
+
+func ConfirmMutationReceiving(userID string, transactionNumber string, notes *string) (*dto.MutationDetailResponse, error) {
+	transaction, err := getMutationTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageMutationReceiving {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageMutationReceiving)
+	}
+
+	// Validasi user homebase harus di branch tujuan
+	homebase, err := GetUserActiveHomebase(userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user homebase: %w", err)
+	}
+
+	if transaction.MutationToBranchCode == nil || homebase.Branch.BranchCode != *transaction.MutationToBranchCode {
+		return nil, fmt.Errorf("only users from branch %s can confirm receiving", *transaction.MutationToBranchCode)
+	}
+
+	// Cek semua attachment serah terima sudah diupload dan approved
+	allAttachmentOK, err := checkAllMutationAttachments(transactionNumber, transaction.ID, models.StageMutationReceiving)
+	if err != nil {
+		return nil, err
+	}
+	if !allAttachmentOK {
+		return nil, errors.New("not all required receiving documents are approved for all assets")
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageMutationExecute); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageMutationExecute,
+		models.ActionGR, userID, nil, notes); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetMutationDetail(transactionNumber)
+}
+
 // autoCompleteMutationApproval — dipanggil otomatis setelah approve step
 // Kalau semua step approved → pindah stage ke EXECUTE_MUTATION
 // Eksekusi dilakukan manual oleh PIC Asset yang berwenang
@@ -957,13 +1020,14 @@ func autoCompleteMutationApproval(userID, transactionNumber, transactionType str
 	}()
 
 	fromStage := transaction.CurrentStage
-	if err := updateTransactionStage(tx, transaction, models.StageMutationExecute); err != nil {
+	// Setelah approval → MUTATION_RECEIVING (branch tujuan upload dok serah terima)
+	if err := updateTransactionStage(tx, transaction, models.StageMutationReceiving); err != nil {
 		tx.Rollback()
 		return err
 	}
 
 	if err := recordStage(tx, transaction.ID, transactionNumber,
-		fromStage, models.StageMutationExecute,
+		fromStage, models.StageMutationReceiving,
 		models.ActionApprove, userID, nil, nil); err != nil {
 		tx.Rollback()
 		return err

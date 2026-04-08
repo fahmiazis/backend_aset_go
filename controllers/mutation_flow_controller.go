@@ -153,6 +153,26 @@ func GetMutationApprovalStatus(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Approval status retrieved successfully", result)
 }
 
+func ConfirmMutationReceiving(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.SubmitMutationRequest // reuse — hanya butuh notes
+	_ = c.ShouldBindJSON(&req)
+
+	result, err := services.ConfirmMutationReceiving(userID, transactionNumber, req.Notes)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Mutation receiving confirmed successfully", result)
+}
+
 func ExecuteMutation(c *gin.Context) {
 	userID := c.GetString("user_id")
 	transactionNumber := c.Query("transaction_number")

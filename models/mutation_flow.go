@@ -7,12 +7,12 @@ import "time"
 // ============================================================
 
 const (
-	StageMutationDraft    = "DRAFT"
-	StageMutationSubmit   = "SUBMITTED"
-	StageMutationApproval = "APPROVAL"
-	StageMutationExecute  = "EXECUTE_MUTATION"
-	StageMutationFinished = "FINISHED"
-	StageMutationRejected = "REJECTED"
+	StageMutationDraft     = "DRAFT"
+	StageMutationApproval  = "APPROVAL"
+	StageMutationReceiving = "MUTATION_RECEIVING" // branch tujuan upload dok serah terima
+	StageMutationExecute   = "EXECUTE_MUTATION"   // PIC Asset eksekusi perpindahan
+	StageMutationFinished  = "FINISHED"
+	StageMutationRejected  = "REJECTED"
 )
 
 const (

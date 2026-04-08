@@ -60,7 +60,14 @@ func SetupMutationFlowRoutes(rg *gin.RouterGroup) {
 			mutationApproval.GET("/status", controllers.GetMutationApprovalStatus)
 		}
 
-		// POST /transactions/mutation/execute?transaction_number → APPROVAL → FINISHED
+		// POST /transactions/mutation/confirm-receiving?transaction_number → APPROVAL → MUTATION_RECEIVING → EXECUTE_MUTATION
+		// Dilakukan oleh user homebase branch tujuan, upload dok serah terima dulu
+		mutation.POST("/confirm-receiving",
+			middleware.RequirePermission("confirm_receiving", "create_transaction"),
+			controllers.ConfirmMutationReceiving)
+
+		// POST /transactions/mutation/execute?transaction_number → EXECUTE_MUTATION → FINISHED
+		// Dilakukan oleh PIC Asset setelah receiving confirmed
 		mutation.POST("/execute",
 			middleware.RequirePermission("execute_mutation"),
 			controllers.ExecuteMutation)
