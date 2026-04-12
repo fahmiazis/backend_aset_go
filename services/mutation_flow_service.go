@@ -890,6 +890,26 @@ func checkAllMutationAttachments(transactionNumber string, transactionID uint, s
 	if err != nil {
 		return false, err
 	}
+
+	isDraft := stage == models.StageDraft
+
+	if isDraft {
+		// Di DRAFT: cukup semua required sudah diupload (PENDING atau APPROVED)
+		// REJECTED tidak boleh
+		for _, asset := range status.Assets {
+			if asset.TotalRejected > 0 {
+				return false, nil
+			}
+			// Cek missing = total required - (approved + pending)
+			uploaded := asset.TotalApproved + asset.TotalPending
+			if uploaded < asset.TotalRequired {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	// Stage lain: semua wajib APPROVED
 	return status.AllCanProceed, nil
 }
 

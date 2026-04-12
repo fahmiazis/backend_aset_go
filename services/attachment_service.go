@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const AttachmentStoragePath = "/app/documents"
+const AttachmentStoragePath = "/home/dev/rebuild_asset/backend_go/documents"
 
 // ============================================================
 // ATTACHMENT CONFIG CRUD
@@ -333,10 +333,21 @@ func GetAttachmentStatusSummary(transactionNumber, transactionType, stage, branc
 		}
 	}
 
-	// Bisa lanjut kalau semua required sudah APPROVED dan tidak ada yang REJECTED
-	canProceed := totalApproved == totalRequired &&
-		totalRejected == 0 &&
-		len(missingRequired) == 0
+	// Bisa lanjut:
+	// - DRAFT: semua required sudah uploaded (PENDING atau APPROVED), tidak ada REJECTED
+	// - Stage lain: semua required sudah APPROVED, tidak ada REJECTED/PENDING
+	isDraftStage := stage == "DRAFT"
+	var canProceed bool
+	if isDraftStage {
+		uploaded := totalApproved + totalPending
+		canProceed = uploaded == totalRequired &&
+			totalRejected == 0 &&
+			len(missingRequired) == 0
+	} else {
+		canProceed = totalApproved == totalRequired &&
+			totalRejected == 0 &&
+			len(missingRequired) == 0
+	}
 
 	return &dto.AttachmentStatusSummary{
 		TransactionNumber: transactionNumber,

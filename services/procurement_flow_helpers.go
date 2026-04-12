@@ -17,15 +17,20 @@ import (
 // ATTACHMENT VALIDATION HELPER
 // ============================================================
 
-// checkAttachmentCanProceed validasi semua required attachment sudah APPROVED
-// sebelum bisa transisi ke stage berikutnya
+// checkAttachmentCanProceed validasi attachment sebelum transisi stage
+// - Stage DRAFT: cukup uploaded (PENDING ok, tidak perlu APPROVED)
+// - Stage lain: wajib semua APPROVED, tidak boleh ada REJECTED atau PENDING
 func checkAttachmentCanProceed(transactionNumber, transactionType, stage, branchCode string) error {
 	summary, err := GetAttachmentStatusSummary(transactionNumber, transactionType, stage, branchCode)
 	if err != nil {
 		return fmt.Errorf("failed to check attachment status: %w", err)
 	}
 
-	if !summary.CanProceed {
+	isDraft := stage == models.StageDraft
+
+	if isDraft {
+		// Di DRAFT: cukup semua required sudah diupload (PENDING atau APPROVED)
+		// REJECTED tidak boleh
 		if len(summary.MissingRequired) > 0 {
 			missing := make([]string, len(summary.MissingRequired))
 			for i, m := range summary.MissingRequired {
@@ -36,8 +41,22 @@ func checkAttachmentCanProceed(transactionNumber, transactionType, stage, branch
 		if summary.TotalRejected > 0 {
 			return fmt.Errorf("there are %d rejected attachment(s), please revise the transaction or reject it", summary.TotalRejected)
 		}
-		if summary.TotalPending > 0 {
-			return fmt.Errorf("there are %d attachment(s) still pending review", summary.TotalPending)
+	} else {
+		// Di stage lain: semua required wajib APPROVED
+		if !summary.CanProceed {
+			if len(summary.MissingRequired) > 0 {
+				missing := make([]string, len(summary.MissingRequired))
+				for i, m := range summary.MissingRequired {
+					missing[i] = m.AttachmentType
+				}
+				return fmt.Errorf("required attachments not yet uploaded: %v", missing)
+			}
+			if summary.TotalRejected > 0 {
+				return fmt.Errorf("there are %d rejected attachment(s), please revise the transaction or reject it", summary.TotalRejected)
+			}
+			if summary.TotalPending > 0 {
+				return fmt.Errorf("there are %d attachment(s) still pending review", summary.TotalPending)
+			}
 		}
 	}
 
