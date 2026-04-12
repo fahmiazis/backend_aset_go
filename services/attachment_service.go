@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const AttachmentStoragePath = "/home/dev/rebuild_asset/backend_go/documents"
+const AttachmentStoragePath = "/app/documents"
 
 // ============================================================
 // ATTACHMENT CONFIG CRUD
