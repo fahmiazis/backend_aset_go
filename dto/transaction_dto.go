@@ -7,6 +7,7 @@ type TransactionHeaderResponse struct {
 	TransactionNumber string     `json:"transaction_number"`
 	TransactionType   string     `json:"transaction_type"`
 	TransactionDate   time.Time  `json:"transaction_date"`
+	CurrentStage      string     `json:"current_stage"`
 	Status            string     `json:"status"`
 	Notes             *string    `json:"notes"`
 	CreatedBy         string     `json:"created_by"`

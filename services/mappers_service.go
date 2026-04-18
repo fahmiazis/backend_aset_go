@@ -17,6 +17,7 @@ func mapTransactionHeaderToResponse(tx models.Transaction) dto.TransactionHeader
 		TransactionType:   tx.TransactionType,
 		TransactionDate:   tx.TransactionDate,
 		Status:            tx.Status,
+		CurrentStage:      tx.CurrentStage, // ADD
 		Notes:             tx.Notes,
 		CreatedBy:         tx.CreatedBy,
 		ApprovedBy:        tx.ApprovedBy,
