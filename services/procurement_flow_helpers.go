@@ -18,19 +18,26 @@ import (
 // ============================================================
 
 // checkAttachmentCanProceed validasi attachment sebelum transisi stage
-// - Stage DRAFT: cukup uploaded (PENDING ok, tidak perlu APPROVED)
-// - Stage lain: wajib semua APPROVED, tidak boleh ada REJECTED atau PENDING
+//
+// Logika:
+//   - Stage DRAFT → submit:
+//     Cukup semua required DRAFT attachment sudah diupload (PENDING/APPROVED)
+//     Tidak boleh ada yang REJECTED
+//
+// - Stage selain DRAFT → lanjut ke stage berikutnya:
+//  1. Semua attachment dari stage DRAFT wajib sudah APPROVED
+//     (dicek oleh user di stage ini)
+//  2. Semua attachment dari stage saat ini wajib sudah APPROVED
+//     Tidak boleh ada PENDING atau REJECTED di kedua stage tersebut
 func checkAttachmentCanProceed(transactionNumber, transactionType, stage, branchCode string) error {
-	summary, err := GetAttachmentStatusSummary(transactionNumber, transactionType, stage, branchCode)
-	if err != nil {
-		return fmt.Errorf("failed to check attachment status: %w", err)
-	}
-
 	isDraft := stage == models.StageDraft
 
 	if isDraft {
-		// Di DRAFT: cukup semua required sudah diupload (PENDING atau APPROVED)
-		// REJECTED tidak boleh
+		// Cek attachment DRAFT — cukup uploaded, tidak perlu APPROVED
+		summary, err := GetAttachmentStatusSummary(transactionNumber, transactionType, models.StageDraft, branchCode)
+		if err != nil {
+			return fmt.Errorf("failed to check draft attachment status: %w", err)
+		}
 		if len(summary.MissingRequired) > 0 {
 			missing := make([]string, len(summary.MissingRequired))
 			for i, m := range summary.MissingRequired {
@@ -41,23 +48,48 @@ func checkAttachmentCanProceed(transactionNumber, transactionType, stage, branch
 		if summary.TotalRejected > 0 {
 			return fmt.Errorf("there are %d rejected attachment(s), please revise the transaction or reject it", summary.TotalRejected)
 		}
-	} else {
-		// Di stage lain: semua required wajib APPROVED
-		if !summary.CanProceed {
-			if len(summary.MissingRequired) > 0 {
-				missing := make([]string, len(summary.MissingRequired))
-				for i, m := range summary.MissingRequired {
-					missing[i] = m.AttachmentType
-				}
-				return fmt.Errorf("required attachments not yet uploaded: %v", missing)
-			}
-			if summary.TotalRejected > 0 {
-				return fmt.Errorf("there are %d rejected attachment(s), please revise the transaction or reject it", summary.TotalRejected)
-			}
-			if summary.TotalPending > 0 {
-				return fmt.Errorf("there are %d attachment(s) still pending review", summary.TotalPending)
-			}
+		return nil
+	}
+
+	// Stage selain DRAFT:
+	// 1. Cek attachment DRAFT harus sudah semua APPROVED
+	draftSummary, err := GetAttachmentStatusSummary(transactionNumber, transactionType, models.StageDraft, branchCode)
+	if err != nil {
+		return fmt.Errorf("failed to check draft attachment status: %w", err)
+	}
+	if draftSummary.TotalPending > 0 {
+		return fmt.Errorf("there are %d draft attachment(s) still pending review", draftSummary.TotalPending)
+	}
+	if draftSummary.TotalRejected > 0 {
+		return fmt.Errorf("there are %d draft attachment(s) rejected, please revise the transaction", draftSummary.TotalRejected)
+	}
+	if !draftSummary.CanProceed {
+		missing := make([]string, len(draftSummary.MissingRequired))
+		for i, m := range draftSummary.MissingRequired {
+			missing[i] = m.AttachmentType
 		}
+		return fmt.Errorf("required draft attachments not yet approved: %v", missing)
+	}
+
+	// 2. Cek attachment stage saat ini harus sudah semua APPROVED
+	stageSummary, err := GetAttachmentStatusSummary(transactionNumber, transactionType, stage, branchCode)
+	if err != nil {
+		return fmt.Errorf("failed to check %s attachment status: %w", stage, err)
+	}
+	if !stageSummary.CanProceed {
+		if len(stageSummary.MissingRequired) > 0 {
+			missing := make([]string, len(stageSummary.MissingRequired))
+			for i, m := range stageSummary.MissingRequired {
+				missing[i] = m.AttachmentType
+			}
+			return fmt.Errorf("required %s attachments not yet uploaded: %v", stage, missing)
+		}
+		// if stageSummary.TotalRejected > 0 {
+		// 	return fmt.Errorf("there are %d %s attachment(s) rejected, please revise the transaction", stageSummary.TotalRejected, stage)
+		// }
+		// if stageSummary.TotalPending > 0 {
+		// 	return fmt.Errorf("there are %d %s attachment(s) still pending review", stageSummary.TotalPending, stage)
+		// }
 	}
 
 	return nil

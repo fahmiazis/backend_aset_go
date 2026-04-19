@@ -333,21 +333,11 @@ func GetAttachmentStatusSummary(transactionNumber, transactionType, stage, branc
 		}
 	}
 
-	// Bisa lanjut:
-	// - DRAFT: semua required sudah uploaded (PENDING atau APPROVED), tidak ada REJECTED
-	// - Stage lain: semua required sudah APPROVED, tidak ada REJECTED/PENDING
-	isDraftStage := stage == "DRAFT"
-	var canProceed bool
-	if isDraftStage {
-		uploaded := totalApproved + totalPending
-		canProceed = uploaded == totalRequired &&
-			totalRejected == 0 &&
-			len(missingRequired) == 0
-	} else {
-		canProceed = totalApproved == totalRequired &&
-			totalRejected == 0 &&
-			len(missingRequired) == 0
-	}
+	// CanProceed = semua required sudah APPROVED dan tidak ada REJECTED/PENDING
+	// Logika khusus DRAFT (cukup uploaded) ditangani di checkAttachmentCanProceed
+	canProceed := totalApproved == totalRequired &&
+		totalRejected == 0 &&
+		len(missingRequired) == 0
 
 	return &dto.AttachmentStatusSummary{
 		TransactionNumber: transactionNumber,
