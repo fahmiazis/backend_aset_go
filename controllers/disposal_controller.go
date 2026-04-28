@@ -39,36 +39,36 @@ func GetDisposalByNumber(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Disposal retrieved successfully", disposal)
 }
 
-func GetAllDisposals(c *gin.Context) {
-	var filter dto.TransactionListFilter
+// func GetAllDisposals(c *gin.Context) {
+// 	var filter dto.TransactionListFilter
 
-	if err := c.ShouldBindQuery(&filter); err != nil {
-		utils.ValidationErrorResponse(c, err)
-		return
-	}
+// 	if err := c.ShouldBindQuery(&filter); err != nil {
+// 		utils.ValidationErrorResponse(c, err)
+// 		return
+// 	}
 
-	if filter.Page == 0 {
-		filter.Page = 1
-	}
-	if filter.Limit == 0 {
-		filter.Limit = 10
-	}
+// 	if filter.Page == 0 {
+// 		filter.Page = 1
+// 	}
+// 	if filter.Limit == 0 {
+// 		filter.Limit = 10
+// 	}
 
-	disposals, total, err := services.GetAllDisposals(filter)
-	if err != nil {
-		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
-		return
-	}
+// 	disposals, total, err := services.GetAllDisposals(filter)
+// 	if err != nil {
+// 		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+// 		return
+// 	}
 
-	response := map[string]interface{}{
-		"data":  disposals,
-		"total": total,
-		"page":  filter.Page,
-		"limit": filter.Limit,
-	}
+// 	response := map[string]interface{}{
+// 		"data":  disposals,
+// 		"total": total,
+// 		"page":  filter.Page,
+// 		"limit": filter.Limit,
+// 	}
 
-	utils.SuccessResponse(c, http.StatusOK, "Disposals retrieved successfully", response)
-}
+// 	utils.SuccessResponse(c, http.StatusOK, "Disposals retrieved successfully", response)
+// }
 
 func UpdateDisposal(c *gin.Context) {
 	userID := c.GetString("user_id")

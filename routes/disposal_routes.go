@@ -15,7 +15,7 @@ func SetupDisposalRoutes(rg *gin.RouterGroup) {
 			middleware.RequirePermission("create_transaction"),
 			controllers.CreateDisposal)
 
-		disposal.GET("", controllers.GetAllDisposals)
+		// disposal.GET("", controllers.GetAllDisposals)
 		disposal.GET("/:number", controllers.GetDisposalByNumber)
 		disposal.PUT("/:number", controllers.UpdateDisposal)
 		disposal.DELETE("/:number", controllers.DeleteDisposal)

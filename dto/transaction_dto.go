@@ -18,8 +18,10 @@ type TransactionHeaderResponse struct {
 }
 
 type TransactionListFilter struct {
-	TransactionType *string `form:"transaction_type" binding:"omitempty,oneof=PROCUREMENT MUTATION DISPOSAL STOCK_OPNAME"` // FIX: uppercase konsisten
-	Status          *string `form:"status" binding:"omitempty,oneof=DRAFT APPROVED REJECTED"`
+	TransactionType *string `form:"transaction_type" binding:"omitempty,oneof=PROCUREMENT MUTATION DISPOSAL STOCK_OPNAME"`
+	Status          *string `form:"status"`
+	CurrentStage    *string `form:"current_stage"` // ADD: filter by stage
+	CreatedBy       *string `form:"created_by"`    // ADD: filter by creator (UUID)
 	StartDate       *string `form:"start_date"`
 	EndDate         *string `form:"end_date"`
 	Page            int     `form:"page" binding:"min=1"`

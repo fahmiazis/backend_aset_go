@@ -645,9 +645,44 @@ func GetMutationDetail(transactionNumber string) (*dto.MutationDetailResponse, e
 	}, nil
 }
 
-func GetAllMutationDrafts(userID string, page, limit int) ([]dto.MutationDetailResponse, int64, error) {
+type MutationListFilter struct {
+	Status       *string `form:"status"`
+	CurrentStage *string `form:"current_stage"`
+	CreatedBy    *string `form:"created_by"`
+	StartDate    *string `form:"start_date"`
+	EndDate      *string `form:"end_date"`
+	Page         int     `form:"page"`
+	Limit        int     `form:"limit"`
+}
+
+func GetAllMutationDrafts(filter MutationListFilter) ([]dto.MutationDetailResponse, int64, error) {
 	query := config.DB.Model(&models.Transaction{}).
-		Where("transaction_type = ? AND created_by = ?", TxMutationFlow, userID)
+		Where("transaction_type = ?", TxMutationFlow)
+
+	if filter.Status != nil {
+		query = query.Where("status = ?", *filter.Status)
+	}
+	if filter.CurrentStage != nil {
+		query = query.Where("current_stage = ?", *filter.CurrentStage)
+	}
+	if filter.CreatedBy != nil {
+		query = query.Where("created_by = ?", *filter.CreatedBy)
+	}
+	if filter.StartDate != nil {
+		query = query.Where("transaction_date >= ?", *filter.StartDate)
+	}
+	if filter.EndDate != nil {
+		query = query.Where("transaction_date <= ?", *filter.EndDate)
+	}
+
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := filter.Limit
+	if limit < 1 {
+		limit = 10
+	}
 
 	var total int64
 	query.Count(&total)

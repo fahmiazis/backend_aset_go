@@ -48,6 +48,47 @@ func GetMutationDetail(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Mutation detail retrieved successfully", result)
 }
 
+func GetAllMutationsFlow(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+
+	filter := services.MutationListFilter{
+		Page:  page,
+		Limit: limit,
+	}
+
+	if status := c.Query("status"); status != "" {
+		filter.Status = &status
+	}
+	if stage := c.Query("current_stage"); stage != "" {
+		filter.CurrentStage = &stage
+	}
+	if createdBy := c.Query("created_by"); createdBy != "" {
+		filter.CreatedBy = &createdBy
+	}
+	if startDate := c.Query("start_date"); startDate != "" {
+		filter.StartDate = &startDate
+	}
+	if endDate := c.Query("end_date"); endDate != "" {
+		filter.EndDate = &endDate
+	}
+
+	results, total, err := services.GetAllMutationDrafts(filter)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	response := map[string]interface{}{
+		"data":  results,
+		"total": total,
+		"page":  filter.Page,
+		"limit": filter.Limit,
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Mutations retrieved successfully", response)
+}
+
 func AddAssetToMutation(c *gin.Context) {
 	userID := c.GetString("user_id")
 	transactionNumber := c.Query("transaction_number")

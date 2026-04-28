@@ -122,49 +122,6 @@ func GetDisposalByTransactionNumber(transactionNumber string) (*dto.DisposalResp
 	}, nil
 }
 
-func GetAllDisposals(filter dto.TransactionListFilter) ([]dto.DisposalResponse, int64, error) {
-	query := config.DB.Model(&models.Transaction{}).Where("transaction_type = ?", TxDisposal)
-
-	if filter.Status != nil {
-		query = query.Where("status = ?", *filter.Status)
-	}
-	if filter.StartDate != nil {
-		query = query.Where("transaction_date >= ?", *filter.StartDate)
-	}
-	if filter.EndDate != nil {
-		query = query.Where("transaction_date <= ?", *filter.EndDate)
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	offset := (filter.Page - 1) * filter.Limit
-
-	var transactions []models.Transaction
-	if err := query.
-		Order("created_at DESC").
-		Offset(offset).
-		Limit(filter.Limit).
-		Find(&transactions).Error; err != nil {
-		return nil, 0, err
-	}
-
-	responses := make([]dto.DisposalResponse, len(transactions))
-	for i, t := range transactions {
-		var disposals []models.TransactionDisposal
-		config.DB.Preload("Asset").Where("transaction_id = ?", t.ID).Find(&disposals)
-
-		responses[i] = dto.DisposalResponse{
-			Transaction: mapTransactionHeaderToResponse(t),
-			Items:       mapDisposalItemsToResponse(disposals),
-		}
-	}
-
-	return responses, total, nil
-}
-
 func UpdateDisposal(transactionNumber string, userID string, req dto.CreateDisposalRequest) (*dto.DisposalResponse, error) {
 	var transaction models.Transaction
 	if err := config.DB.

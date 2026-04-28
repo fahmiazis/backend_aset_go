@@ -201,6 +201,12 @@ func GetAllProcurements(filter dto.TransactionListFilter) ([]dto.ProcurementResp
 	if filter.Status != nil {
 		query = query.Where("status = ?", *filter.Status)
 	}
+	if filter.CurrentStage != nil {
+		query = query.Where("current_stage = ?", *filter.CurrentStage)
+	}
+	if filter.CreatedBy != nil {
+		query = query.Where("created_by = ?", *filter.CreatedBy)
+	}
 	if filter.StartDate != nil {
 		query = query.Where("transaction_date >= ?", *filter.StartDate)
 	}

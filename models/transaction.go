@@ -20,6 +20,11 @@ type Transaction struct {
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 
+	DisposalType            *string  `gorm:"size:20;index" json:"disposal_type"`
+	SaleValue               *float64 `gorm:"type:decimal(18,2)" json:"sale_value"`
+	ApprovalRequestNumber   *string  `gorm:"size:100" json:"approval_request_number"`
+	ApprovalAgreementNumber *string  `gorm:"size:100" json:"approval_agreement_number"`
+
 	// Relations to Transaction Details
 	TransactionProcurements []TransactionProcurement `gorm:"foreignKey:TransactionID" json:"transaction_procurements,omitempty"`
 	TransactionMutations    []TransactionMutation    `gorm:"foreignKey:TransactionID" json:"transaction_mutations,omitempty"`
