@@ -8,14 +8,14 @@ import (
 )
 
 func SetupDisposalRoutes(rg *gin.RouterGroup) {
-	disposal := rg.Group("/transactions/disposal")
+	disposal := rg.Group("/transactions/disposal/old")
 	disposal.Use(middleware.AuthMiddleware())
 	{
 		disposal.POST("",
 			middleware.RequirePermission("create_transaction"),
 			controllers.CreateDisposal)
 
-		// disposal.GET("", controllers.GetAllDisposals)
+		disposal.GET("", controllers.GetAllDisposals)
 		disposal.GET("/:number", controllers.GetDisposalByNumber)
 		disposal.PUT("/:number", controllers.UpdateDisposal)
 		disposal.DELETE("/:number", controllers.DeleteDisposal)
