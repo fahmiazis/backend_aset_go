@@ -42,6 +42,12 @@ func SetupAttachmentRoutes(rg *gin.RouterGroup) {
 		// GET /attachments/status?transaction_number=xxx&transaction_type=procurement&stage=xxx&branch_code=xxx
 		attachments.GET("/status", controllers.GetAttachmentStatusSummary)
 
+		// GET /attachments/{attachment_id}/file?download=true for download file
+		// GET /attachments/{attachment_id}/file?download=false for preview file
+		attachments.GET("/:id/file",
+			middleware.AuthMiddleware(),
+			controllers.ServeAttachmentFile)
+
 		// POST /attachments/upload?transaction_number=xxx&transaction_type=procurement&stage=xxx
 		// multipart/form-data: file + attachment_config_id
 		attachments.POST("/upload",

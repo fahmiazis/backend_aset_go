@@ -5,6 +5,7 @@ import (
 	"backend-go/services"
 	"backend-go/utils"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -200,4 +201,31 @@ func GetAttachmentStatusSummary(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "Attachment status retrieved successfully", summary)
+}
+
+func ServeAttachmentFile(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	attachment, err := services.GetAttachmentByID(uint(id))
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// Cek file exist di disk
+	if _, err := os.Stat(attachment.FilePath); os.IsNotExist(err) {
+		utils.ErrorResponse(c, http.StatusNotFound, "file not found on server")
+		return
+	}
+
+	// Serve file — Gin set Content-Type otomatis dari extension
+	if c.Query("download") == "true" {
+		c.FileAttachment(attachment.FilePath, attachment.FileName)
+	} else {
+		c.File(attachment.FilePath)
+	}
 }

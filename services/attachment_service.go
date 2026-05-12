@@ -516,3 +516,14 @@ func mapTransactionAttachmentsToResponse(atts []models.TransactionAttachment) []
 	}
 	return result
 }
+
+func GetAttachmentByID(attachmentID uint) (*models.TransactionAttachment, error) {
+	var attachment models.TransactionAttachment
+	if err := config.DB.First(&attachment, attachmentID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("attachment not found")
+		}
+		return nil, err
+	}
+	return &attachment, nil
+}
