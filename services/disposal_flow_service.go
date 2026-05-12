@@ -74,6 +74,16 @@ func nextStageForDisposal(disposalType, currentStage string) (string, error) {
 	return "", fmt.Errorf("no next stage after %s for disposal type %s", currentStage, disposalType)
 }
 
+// GetCreatorBranchCode — ambil branch code homebase creator transaksi.
+// Fallback ke "ALL" kalau homebase tidak ditemukan, supaya tetap match config global.
+func GetCreatorBranchCode(createdBy string) string {
+	homebase, err := GetUserActiveHomebase(createdBy)
+	if err != nil || homebase == nil {
+		return "ALL"
+	}
+	return homebase.Branch.BranchCode
+}
+
 // ============================================================
 // CREATE DRAFT DISPOSAL
 // ============================================================
@@ -354,7 +364,7 @@ func SetDisposalSaleValues(userID string, transactionNumber string, req dto.SetD
 	}
 
 	// Cek semua attachment purchasing sudah diupload
-	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalPurchasing)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalPurchasing, GetCreatorBranchCode(transaction.CreatedBy))
 	if err != nil {
 		return nil, err
 	}
@@ -651,7 +661,7 @@ func ExecuteDisposal(userID string, transactionNumber string, req dto.ExecuteDis
 	}
 
 	// Cek semua attachment execute sudah approved
-	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalExecute)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalExecute, GetCreatorBranchCode(transaction.CreatedBy))
 	if err != nil {
 		return nil, err
 	}
@@ -711,7 +721,7 @@ func ConfirmDisposalFinance(userID string, transactionNumber string, req dto.Con
 	}
 
 	// Cek semua attachment finance sudah approved
-	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalFinance)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalFinance, GetCreatorBranchCode(transaction.CreatedBy))
 	if err != nil {
 		return nil, err
 	}
@@ -768,7 +778,7 @@ func ConfirmDisposalTax(userID string, transactionNumber string, req dto.Confirm
 	}
 
 	// Cek semua attachment tax sudah approved
-	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalTax)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalTax, GetCreatorBranchCode(transaction.CreatedBy))
 	if err != nil {
 		return nil, err
 	}
@@ -1233,7 +1243,7 @@ func ReviewDisposalAttachment(reviewerID string, attachmentID uint, req dto.Revi
 	return &response, nil
 }
 
-func GetDisposalAttachmentStatus(transactionNumber string, transactionID uint, stage string) (*dto.DisposalAllAttachmentStatus, error) {
+func GetDisposalAttachmentStatus(transactionNumber string, transactionID uint, stage string, branchCode string) (*dto.DisposalAllAttachmentStatus, error) {
 	var disposalAssets []models.TransactionDisposalAsset
 	config.DB.
 		Where("transaction_id = ? AND status = ?", transactionID, models.DisposalAssetStatusPending).
@@ -1244,7 +1254,7 @@ func GetDisposalAttachmentStatus(transactionNumber string, transactionID uint, s
 
 	for _, da := range disposalAssets {
 		// Get required configs untuk disposal di stage ini
-		requiredConfigs, err := getRequiredConfigs(TxDisposalFlow, stage, "")
+		requiredConfigs, err := getRequiredConfigs(TxDisposalFlow, stage, branchCode)
 		if err != nil {
 			return nil, err
 		}
@@ -1312,8 +1322,8 @@ func GetDisposalAttachmentStatus(transactionNumber string, transactionID uint, s
 // HELPERS INTERNAL
 // ============================================================
 
-func checkAllDisposalAttachments(transactionNumber string, transactionID uint, stage string) (bool, error) {
-	status, err := GetDisposalAttachmentStatus(transactionNumber, transactionID, stage)
+func checkAllDisposalAttachments(transactionNumber string, transactionID uint, stage string, branchCode string) (bool, error) {
+	status, err := GetDisposalAttachmentStatus(transactionNumber, transactionID, stage, branchCode)
 	if err != nil {
 		return false, err
 	}

@@ -454,7 +454,8 @@ func GetDisposalAttachmentStatus(c *gin.Context) {
 		return
 	}
 
-	result, err := services.GetDisposalAttachmentStatus(transactionNumber, detail.Transaction.ID, stage)
+	branchCode := services.GetCreatorBranchCode(detail.Transaction.CreatedBy)
+	result, err := services.GetDisposalAttachmentStatus(transactionNumber, detail.Transaction.ID, stage, branchCode)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return
