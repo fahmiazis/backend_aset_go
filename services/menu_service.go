@@ -113,7 +113,11 @@ func UpdateMenu(id string, req dto.UpdateMenuRequest) (*dto.MenuResponse, error)
 	updates := make(map[string]interface{})
 
 	if req.ParentID != nil {
-		updates["parent_id"] = req.ParentID
+		if *req.ParentID == "" {
+			updates["parent_id"] = nil
+		} else {
+			updates["parent_id"] = *req.ParentID
+		}
 	}
 	if req.Name != "" {
 		updates["name"] = req.Name
