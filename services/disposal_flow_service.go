@@ -40,7 +40,6 @@ func stagesForDisposalType(disposalType string) []string {
 	if disposalType == models.DisposalTypeSell {
 		return []string{
 			models.StageDisposalDraft,
-			models.StageDisposalSubmitted,
 			models.StageDisposalPurchasing,
 			models.StageDisposalApprovalRequest,
 			models.StageDisposalApprovalAgreement,
@@ -54,7 +53,6 @@ func stagesForDisposalType(disposalType string) []string {
 	// DISPOSE
 	return []string{
 		models.StageDisposalDraft,
-		models.StageDisposalSubmitted,
 		models.StageDisposalApprovalRequest,
 		models.StageDisposalApprovalAgreement,
 		models.StageDisposalExecute,
@@ -295,7 +293,7 @@ func RemoveAssetFromDisposal(userID string, transactionNumber string, req dto.Re
 
 // ============================================================
 // SUBMIT
-// DRAFT → SUBMITTED
+// DRAFT → PURCHASING (SELL) / APPROVAL_REQUEST (DISPOSE)
 // ============================================================
 
 func SubmitDisposal(userID string, transactionNumber string, req dto.SubmitDisposalRequest) (*dto.DisposalDetailResponse, error) {
@@ -319,6 +317,16 @@ func SubmitDisposal(userID string, transactionNumber string, req dto.SubmitDispo
 		Count(&assetCount)
 	if assetCount == 0 {
 		return nil, errors.New("cannot submit disposal with no assets")
+	}
+
+	// Cek attachment DRAFT sudah semua diupload (cukup PENDING, tidak boleh REJECTED/missing)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID,
+		models.StageDisposalDraft, GetCreatorBranchCode(transaction.CreatedBy), false)
+	if err != nil {
+		return nil, err
+	}
+	if !allOK {
+		return nil, errors.New("not all required draft documents are uploaded for all assets")
 	}
 
 	nextStage, err := nextStageForDisposal(*transaction.DisposalType, transaction.CurrentStage)
@@ -355,7 +363,7 @@ func SubmitDisposal(userID string, transactionNumber string, req dto.SubmitDispo
 
 // ============================================================
 // PURCHASING — set sale_value per asset (SELL only)
-// SUBMITTED → APPROVAL_REQUEST (setelah purchasing confirm)
+// PURCHASING → APPROVAL_REQUEST (setelah purchasing confirm)
 // ============================================================
 
 func SetDisposalSaleValues(userID string, transactionNumber string, req dto.SetDisposalSaleValueRequest) (*dto.DisposalDetailResponse, error) {
@@ -372,13 +380,24 @@ func SetDisposalSaleValues(userID string, transactionNumber string, req dto.SetD
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageDisposalPurchasing)
 	}
 
-	// Cek semua attachment purchasing sudah diupload
-	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalPurchasing, GetCreatorBranchCode(transaction.CreatedBy))
+	branchCode := GetCreatorBranchCode(transaction.CreatedBy)
+
+	// Cek attachment DRAFT sudah semua APPROVED
+	draftOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalDraft, branchCode, true)
+	if err != nil {
+		return nil, err
+	}
+	if !draftOK {
+		return nil, errors.New("not all required draft documents are approved for all assets")
+	}
+
+	// Cek attachment PURCHASING sudah semua diupload (cukup PENDING)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalPurchasing, branchCode, false)
 	if err != nil {
 		return nil, err
 	}
 	if !allOK {
-		return nil, errors.New("not all required purchasing documents are approved for all assets")
+		return nil, errors.New("not all required purchasing documents are uploaded for all assets")
 	}
 
 	tx := config.DB.Begin()
@@ -422,7 +441,7 @@ func SetDisposalSaleValues(userID string, transactionNumber string, req dto.SetD
 
 // ============================================================
 // INITIATE APPROVAL REQUEST
-// SUBMITTED → APPROVAL_REQUEST  (DISPOSE)
+// DISPOSE: langsung dari DRAFT → APPROVAL_REQUEST via submit
 // PURCHASING done → APPROVAL_REQUEST (SELL — sudah dihandle di SetDisposalSaleValues)
 // ============================================================
 
@@ -669,13 +688,24 @@ func ExecuteDisposal(userID string, transactionNumber string, req dto.ExecuteDis
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageDisposalExecute)
 	}
 
-	// Cek semua attachment execute sudah approved
-	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalExecute, GetCreatorBranchCode(transaction.CreatedBy))
+	branchCode := GetCreatorBranchCode(transaction.CreatedBy)
+
+	// Cek attachment DRAFT sudah semua APPROVED
+	draftOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalDraft, branchCode, true)
+	if err != nil {
+		return nil, err
+	}
+	if !draftOK {
+		return nil, errors.New("not all required draft documents are approved for all assets")
+	}
+
+	// Cek attachment EXECUTE sudah semua diupload (cukup PENDING)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalExecute, branchCode, false)
 	if err != nil {
 		return nil, err
 	}
 	if !allOK {
-		return nil, errors.New("not all required execute documents are approved for all assets")
+		return nil, errors.New("not all required execute documents are uploaded for all assets")
 	}
 
 	nextStage, err := nextStageForDisposal(*transaction.DisposalType, transaction.CurrentStage)
@@ -729,13 +759,24 @@ func ConfirmDisposalFinance(userID string, transactionNumber string, req dto.Con
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageDisposalFinance)
 	}
 
-	// Cek semua attachment finance sudah approved
-	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalFinance, GetCreatorBranchCode(transaction.CreatedBy))
+	branchCode := GetCreatorBranchCode(transaction.CreatedBy)
+
+	// Cek attachment DRAFT sudah semua APPROVED
+	draftOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalDraft, branchCode, true)
+	if err != nil {
+		return nil, err
+	}
+	if !draftOK {
+		return nil, errors.New("not all required draft documents are approved for all assets")
+	}
+
+	// Cek attachment FINANCE sudah semua diupload (cukup PENDING)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalFinance, branchCode, false)
 	if err != nil {
 		return nil, err
 	}
 	if !allOK {
-		return nil, errors.New("not all required finance documents are approved for all assets")
+		return nil, errors.New("not all required finance documents are uploaded for all assets")
 	}
 
 	tx := config.DB.Begin()
@@ -786,13 +827,24 @@ func ConfirmDisposalTax(userID string, transactionNumber string, req dto.Confirm
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageDisposalTax)
 	}
 
-	// Cek semua attachment tax sudah approved
-	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalTax, GetCreatorBranchCode(transaction.CreatedBy))
+	branchCode := GetCreatorBranchCode(transaction.CreatedBy)
+
+	// Cek attachment DRAFT sudah semua APPROVED
+	draftOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalDraft, branchCode, true)
+	if err != nil {
+		return nil, err
+	}
+	if !draftOK {
+		return nil, errors.New("not all required draft documents are approved for all assets")
+	}
+
+	// Cek attachment TAX sudah semua diupload (cukup PENDING)
+	allOK, err := checkAllDisposalAttachments(transactionNumber, transaction.ID, models.StageDisposalTax, branchCode, false)
 	if err != nil {
 		return nil, err
 	}
 	if !allOK {
-		return nil, errors.New("not all required tax documents are approved for all assets")
+		return nil, errors.New("not all required tax documents are uploaded for all assets")
 	}
 
 	tx := config.DB.Begin()
@@ -1331,12 +1383,31 @@ func GetDisposalAttachmentStatus(transactionNumber string, transactionID uint, s
 // HELPERS INTERNAL
 // ============================================================
 
-func checkAllDisposalAttachments(transactionNumber string, transactionID uint, stage string, branchCode string) (bool, error) {
+// checkAllDisposalAttachments — cek attachment di stage tertentu
+// requireApproved=true  → semua wajib APPROVED (untuk cek stage sebelumnya)
+// requireApproved=false → cukup uploaded PENDING/APPROVED, tidak boleh REJECTED/missing (untuk cek stage sekarang)
+func checkAllDisposalAttachments(transactionNumber string, transactionID uint, stage string, branchCode string, requireApproved bool) (bool, error) {
 	status, err := GetDisposalAttachmentStatus(transactionNumber, transactionID, stage, branchCode)
 	if err != nil {
 		return false, err
 	}
-	return status.AllCanProceed, nil
+
+	if requireApproved {
+		// Semua wajib APPROVED
+		return status.AllCanProceed, nil
+	}
+
+	// Cukup uploaded (PENDING atau APPROVED), tidak boleh REJECTED dan tidak boleh missing
+	for _, asset := range status.Assets {
+		if asset.TotalRejected > 0 {
+			return false, nil
+		}
+		uploaded := asset.TotalApproved + asset.TotalPending
+		if uploaded < asset.TotalRequired {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func mapDisposalAttachmentToResponse(att models.TransactionDisposalAttachment) dto.DisposalAttachmentResponse {

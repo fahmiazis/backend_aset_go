@@ -8,7 +8,6 @@ import "time"
 
 const (
 	StageDisposalDraft             = "DRAFT"
-	StageDisposalSubmitted         = "SUBMITTED"
 	StageDisposalPurchasing        = "PURCHASING" // SELL only
 	StageDisposalApprovalRequest   = "APPROVAL_REQUEST"
 	StageDisposalApprovalAgreement = "APPROVAL_AGREEMENT"
@@ -118,10 +117,11 @@ type TransactionDisposalAttachment struct {
 func (TransactionDisposalAttachment) TableName() string { return "transaction_disposal_attachments" }
 
 // ============================================================
-// Tambahan field di struct Transaction (reference — tidak ditulis ulang):
+// Tambahkan field berikut ke struct Transaction di transaction_model.go
+// (setelah field MutationToBranchCode):
 //
-// DisposalType              *string  `gorm:"size:20;index" json:"disposal_type"`
-// SaleValue                 *float64 `gorm:"type:decimal(18,2)" json:"sale_value"`
-// ApprovalRequestNumber     *string  `gorm:"size:100" json:"approval_request_number"`
-// ApprovalAgreementNumber   *string  `gorm:"size:100" json:"approval_agreement_number"`
+// DisposalType             *string  `gorm:"size:20;index" json:"disposal_type"`
+// SaleValue                *float64 `gorm:"type:decimal(18,2)" json:"sale_value"`
+// ApprovalRequestNumber    *string  `gorm:"size:100" json:"approval_request_number"`
+// ApprovalAgreementNumber  *string  `gorm:"size:100" json:"approval_agreement_number"`
 // ============================================================
