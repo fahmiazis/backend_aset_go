@@ -153,6 +153,9 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 		fmt.Printf("RequirePermission: requestPath=%s, basePath=%s\n", requestPath, basePath)
 
 		// 3. Cari menu — FIX: strict block kalau menu tidak ditemukan
+		fmt.Printf("=== RequirePermission DEBUG ===\n")
+		fmt.Printf("basePath: %s\n", basePath)
+
 		var menu models.Menu
 		if err := config.DB.Where("route_path = ? AND deleted_at IS NULL", basePath).First(&menu).Error; err != nil {
 			// Menu tidak terdaftar = akses ditolak
@@ -161,6 +164,10 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+
+		fmt.Printf("menu found: id=%s name=%s\n", menu.ID, menu.Name)
+
+		fmt.Printf("requiredPermissions: %v\n", requiredPermissions)
 
 		// 4. Ambil role_menus untuk menu ini
 		var roleMenus []models.RoleMenu
@@ -183,6 +190,8 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 				userPermissions[p] = true
 			}
 		}
+
+		fmt.Printf("userPermissions: %v\n", userPermissions)
 
 		// 6. Check required permissions
 		hasPermission := false
