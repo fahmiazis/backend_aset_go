@@ -154,7 +154,7 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 
 		// 3. Cari menu — FIX: strict block kalau menu tidak ditemukan
 		var menu models.Menu
-		if err := config.DB.Where("route_path = ?", basePath).First(&menu).Error; err != nil {
+		if err := config.DB.Where("route_path = ? AND deleted_at IS NULL", basePath).First(&menu).Error; err != nil {
 			// Menu tidak terdaftar = akses ditolak
 			// Semua endpoint wajib didaftarkan di tabel menus
 			utils.ErrorResponse(c, http.StatusForbidden, "Access denied: route not registered in menu")
