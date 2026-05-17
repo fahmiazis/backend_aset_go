@@ -166,6 +166,15 @@ func AddAssetToDisposal(userID string, transactionNumber string, req dto.AddDisp
 		return nil, fmt.Errorf("asset %s is not available for disposal (status: %s)", req.AssetNumber, asset.AssetStatus)
 	}
 
+	// Validasi branch code asset harus sama dengan homebase creator
+	creatorHomebase, err := GetUserActiveHomebase(transaction.CreatedBy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get creator homebase: %w", err)
+	}
+	if asset.BranchCode == nil || *asset.BranchCode != creatorHomebase.Branch.BranchCode {
+		return nil, fmt.Errorf("asset %s is not in your branch (%s)", req.AssetNumber, creatorHomebase.Branch.BranchCode)
+	}
+
 	// Cek asset belum ada di draft ini
 	var existingCount int64
 	config.DB.Model(&models.TransactionDisposalAsset{}).
