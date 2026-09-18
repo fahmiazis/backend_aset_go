@@ -62,8 +62,9 @@ type StockOpnameDashboardStats struct {
 
 // StockOpnameGroupingStatus adalah satu batang di chart "Status per grouping".
 // Grouping diambil apa adanya dari assets.grouping (free-text, diisi manual
-// oleh tim aset) — bukan enum tetap. Asset tanpa grouping masuk ke label
-// "Belum Dikelompokkan".
+// oleh tim aset) — bukan enum tetap. Grouping bisa string kosong ("") kalau
+// asset belum dikelompokkan — caller (FE) yang menerjemahkan/menampilkan
+// label untuk kasus ini, bukan backend.
 type StockOpnameGroupingStatus struct {
 	Grouping string                     `json:"grouping"`
 	Status   StockOpnameStatusBreakdown `json:"status"`

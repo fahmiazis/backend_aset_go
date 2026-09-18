@@ -102,11 +102,14 @@ func derefStr(s *string) string {
 	return *s
 }
 
+// groupingLabel returns the trimmed grouping value, or "" when unset — left
+// for the caller (FE) to render/translate as it sees fit, since this is a
+// display concern, not backend business data.
 func groupingLabel(s *string) string {
-	if s == nil || strings.TrimSpace(*s) == "" {
-		return "Belum Dikelompokkan"
+	if s == nil {
+		return ""
 	}
-	return *s
+	return strings.TrimSpace(*s)
 }
 
 // resolveReportPeriod: default ke bulan/tahun berjalan kalau tidak dikirim.
