@@ -1,0 +1,261 @@
+package controllers
+
+import (
+	"backend-go/dto"
+	"backend-go/services"
+	"backend-go/utils"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+)
+
+// ============================================================
+// DRAFT MANAGEMENT
+// ============================================================
+
+func CreateStockOpnameDraft(c *gin.Context) {
+	userID := c.GetString("user_id")
+
+	var req dto.CreateStockOpnameDraftRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.CreateStockOpnameDraft(userID, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusCreated, "Stock opname draft created successfully", result)
+}
+
+func GetStockOpnameFlowDetail(c *gin.Context) {
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	result, err := services.GetStockOpnameFlowDetail(transactionNumber)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname detail retrieved successfully", result)
+}
+
+func GetAllStockOpnamesFlow(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+
+	filter := services.StockOpnameListFilter{
+		Page:  page,
+		Limit: limit,
+	}
+
+	if status := c.Query("status"); status != "" {
+		filter.Status = &status
+	}
+	if stage := c.Query("current_stage"); stage != "" {
+		filter.CurrentStage = &stage
+	}
+	if createdBy := c.Query("created_by"); createdBy != "" {
+		filter.CreatedBy = &createdBy
+	}
+	if startDate := c.Query("start_date"); startDate != "" {
+		filter.StartDate = &startDate
+	}
+	if endDate := c.Query("end_date"); endDate != "" {
+		filter.EndDate = &endDate
+	}
+
+	results, total, err := services.GetAllStockOpnameDrafts(filter)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	response := map[string]interface{}{
+		"data":  results,
+		"total": total,
+		"page":  filter.Page,
+		"limit": filter.Limit,
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opnames retrieved successfully", response)
+}
+
+func AddAssetToStockOpname(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.AddStockOpnameAssetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.AddAssetToStockOpname(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Asset added to stock opname successfully", result)
+}
+
+func UpdateStockOpnameFinding(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.UpdateStockOpnameFindingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.UpdateStockOpnameFinding(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname finding updated successfully", result)
+}
+
+func RemoveAssetFromStockOpname(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.RemoveStockOpnameAssetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.RemoveAssetFromStockOpname(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Asset removed from stock opname successfully", result)
+}
+
+// ============================================================
+// FLOW ACTIONS
+// ============================================================
+
+func SubmitStockOpname(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.SubmitStockOpnameRequest
+	_ = c.ShouldBindJSON(&req)
+
+	result, err := services.SubmitStockOpname(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname submitted successfully", result)
+}
+
+func InitiateStockOpnameApproval(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.InitiateApprovalRequest
+	_ = c.ShouldBindJSON(&req)
+
+	if err := services.InitiateStockOpnameApproval(userID, transactionNumber, req); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Approval initiated successfully", nil)
+}
+
+func GetStockOpnameApprovalStatus(c *gin.Context) {
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	result, err := services.GetTransactionApprovalStatus(transactionNumber, services.TxStockOpnameFlow)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Approval status retrieved successfully", result)
+}
+
+func ExecuteStockOpname(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.ExecuteStockOpnameRequest
+	_ = c.ShouldBindJSON(&req)
+
+	result, err := services.ExecuteStockOpname(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname executed successfully", result)
+}
+
+func RejectStockOpname(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.RejectStockOpnameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.RejectStockOpname(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname rejected", result)
+}

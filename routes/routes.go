@@ -30,6 +30,7 @@ func SetupRoutes(r *gin.Engine) {
 		SetupAttachmentRoutes(v1)
 		SetupMutationFlowRoutes(v1)
 		SetupDisposalFlowRoutes(v1)
+		SetupStockOpnameFlowRoutes(v1)
 	}
 
 	// Health check endpoint (no auth required)
