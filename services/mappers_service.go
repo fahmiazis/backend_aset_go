@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend-go/config"
 	"backend-go/dto"
 	"backend-go/models"
 )
@@ -9,6 +10,22 @@ import (
 // TRANSACTION MAPPERS
 // FIX: hapus strconv, ID sudah uint. Hapus Creator/Approver relation (tidak ada di model).
 // ============================================================================
+
+// resolveUsername mengubah user ID (UUID) jadi username-nya, biar response
+// tidak menampilkan UUID mentah ke FE. Fallback ke ID aslinya kalau user
+// tidak ditemukan (misal sudah dihapus) atau ID kosong.
+func resolveUsername(userID string) string {
+	if userID == "" {
+		return userID
+	}
+
+	var user models.User
+	if err := config.DB.Select("username").Where("id = ?", userID).First(&user).Error; err != nil {
+		return userID
+	}
+
+	return user.Username
+}
 
 func mapTransactionHeaderToResponse(tx models.Transaction) dto.TransactionHeaderResponse {
 	return dto.TransactionHeaderResponse{
@@ -19,7 +36,7 @@ func mapTransactionHeaderToResponse(tx models.Transaction) dto.TransactionHeader
 		Status:            tx.Status,
 		CurrentStage:      tx.CurrentStage, // ADD
 		Notes:             tx.Notes,
-		CreatedBy:         tx.CreatedBy,
+		CreatedBy:         resolveUsername(tx.CreatedBy),
 		ApprovedBy:        tx.ApprovedBy,
 		ApprovedAt:        tx.ApprovedAt,
 		CreatedAt:         tx.CreatedAt,
