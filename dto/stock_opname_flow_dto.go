@@ -4,34 +4,28 @@ import "time"
 
 // ============================================================
 // CREATE DRAFT
+//
+// TransactionDate SENGAJA gak ada di sini — tanggal opname selalu
+// otomatis diisi tanggal hari ini (server time) di service layer.
 // ============================================================
 
 type CreateStockOpnameDraftRequest struct {
-	TransactionDate string  `json:"transaction_date" binding:"required"`
-	Notes           *string `json:"notes"`
-}
-
-// ============================================================
-// ADD ASSET KE DRAFT
-// ============================================================
-
-type AddStockOpnameAssetRequest struct {
-	AssetID     uint   `json:"asset_id" binding:"required"`
-	AssetNumber string `json:"asset_number" binding:"required"`
-}
-
-type RemoveStockOpnameAssetRequest struct {
-	AssetID uint `json:"asset_id" binding:"required"`
+	Notes *string `json:"notes"`
 }
 
 // ============================================================
 // INPUT HASIL TEMUAN FISIK PER ASSET (masih draft)
+//
+// PhysicalStatus hanya 2 opsi: EXISTS ("Ada") / MISSING ("Tidak Ada").
+// Condition punya opsi tambahan NOT_APPLICABLE ("Tidak Ada") yang WAJIB
+// dipakai ketika PhysicalStatus = MISSING (dan hanya boleh dipakai saat
+// itu) — divalidasi silang di service, bukan cuma lewat oneof di sini.
 // ============================================================
 
 type UpdateStockOpnameFindingRequest struct {
 	AssetID        uint    `json:"asset_id" binding:"required"`
-	PhysicalStatus string  `json:"physical_status" binding:"required,oneof=EXISTS MISSING DAMAGED OBSOLETE"`
-	Condition      string  `json:"condition" binding:"required,oneof=GOOD FAIR POOR BROKEN"`
+	PhysicalStatus string  `json:"physical_status" binding:"required,oneof=EXISTS MISSING"`
+	Condition      string  `json:"condition" binding:"required,oneof=GOOD FAIR POOR BROKEN NOT_APPLICABLE"`
 	AssetStatus    *string `json:"asset_status" binding:"omitempty,oneof=ACTIVE INACTIVE MAINTENANCE RETIRED"`
 	Notes          *string `json:"notes"`
 }
@@ -95,4 +89,21 @@ type StockOpnameFlowDetailResponse struct {
 	Transaction TransactionHeaderResponse     `json:"transaction"`
 	Items       []StockOpnameFlowItemResponse `json:"items"`
 	Stages      []TransactionStageResponse    `json:"stages"`
+}
+
+// ============================================================
+// UPLOAD TEMPLATE EXCEL (bulk update temuan)
+// ============================================================
+
+type StockOpnameTemplateRowError struct {
+	Row         int    `json:"row"`
+	AssetNumber string `json:"asset_number"`
+	Message     string `json:"message"`
+}
+
+type StockOpnameTemplateUploadResponse struct {
+	UpdatedCount int                            `json:"updated_count"`
+	FailedCount  int                            `json:"failed_count"`
+	Errors       []StockOpnameTemplateRowError  `json:"errors"`
+	Detail       *StockOpnameFlowDetailResponse `json:"detail"`
 }

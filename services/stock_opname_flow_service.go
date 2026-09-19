@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
+	"github.com/xuri/excelize/v2"
 	"gorm.io/gorm"
 )
 
@@ -38,16 +41,85 @@ func getStockOpnameTransaction(transactionNumber string) (*models.Transaction, e
 // CREATE DRAFT
 // ============================================================
 
+// CreateStockOpnameDraft bikin draft baru dan langsung mengisi semua asset
+// yang ada di branch homebase aktif si pembuat (1 user = 1 homebase aktif).
+// Tidak ada lagi add/remove asset manual — daftar asset adalah snapshot
+// kondisi branch pada saat draft dibuat.
 func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest) (*dto.StockOpnameFlowDetailResponse, error) {
-	transactionDate, err := time.Parse("2006-01-02", req.TransactionDate)
+	now := time.Now()
+	transactionDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	branchCode, err := GetUserActiveBranchCode(userID)
 	if err != nil {
-		return nil, errors.New("invalid transaction date format, use YYYY-MM-DD")
+		return nil, errors.New("anda belum memiliki homebase aktif, silakan set homebase terlebih dahulu")
+	}
+
+	var branchAssets []models.Asset
+	if err := config.DB.
+		Where("branch_code = ? AND deleted_at IS NULL AND asset_status != ?", branchCode, models.AssetStatusDisposed).
+		Find(&branchAssets).Error; err != nil {
+		return nil, err
+	}
+
+	if len(branchAssets) == 0 {
+		return nil, fmt.Errorf("branch %s belum memiliki asset terdaftar, tidak bisa membuat stock opname", branchCode)
+	}
+
+	// Exclude asset yang lagi kepake di stock opname lain yang masih berjalan
+	assetIDs := make([]uint, len(branchAssets))
+	for i, a := range branchAssets {
+		assetIDs[i] = a.ID
+	}
+
+	var busyRows []struct {
+		AssetID           uint
+		TransactionNumber string
+	}
+	config.DB.Table("transaction_stock_opnames").
+		Select("transaction_stock_opnames.asset_id, transactions.transaction_number").
+		Joins("JOIN transactions ON transactions.id = transaction_stock_opnames.transaction_id").
+		Where("transaction_stock_opnames.asset_id IN ? AND transactions.transaction_type = ? AND transactions.current_stage NOT IN ?",
+			assetIDs, TxStockOpnameFlow,
+			[]string{models.StageFinished, models.StageRejected},
+		).
+		Scan(&busyRows)
+
+	busyAssetIDs := map[uint]bool{}
+	blockingTxSeen := map[string]bool{}
+	var blockingTxNumbers []string
+	for _, row := range busyRows {
+		busyAssetIDs[row.AssetID] = true
+		if !blockingTxSeen[row.TransactionNumber] {
+			blockingTxSeen[row.TransactionNumber] = true
+			blockingTxNumbers = append(blockingTxNumbers, row.TransactionNumber)
+		}
+	}
+
+	// Kalau semua asset di branch ini udah kepake stock opname lain yang
+	// masih berjalan, gak ada gunanya bikin draft kosong — tolak dari awal
+	// dengan pesan yang jelas biar user gak bingung liat draft tanpa asset.
+	if len(busyAssetIDs) >= len(branchAssets) {
+		blockingList := strings.Join(blockingTxNumbers, ", ")
+		if len(blockingTxNumbers) > 3 {
+			blockingList = strings.Join(blockingTxNumbers[:3], ", ") + fmt.Sprintf(" (+%d lainnya)", len(blockingTxNumbers)-3)
+		}
+		return nil, fmt.Errorf(
+			"semua asset di branch %s sedang berada di stock opname lain yang masih berjalan: %s. Selesaikan (eksekusi) atau tolak stock opname tersebut dulu sebelum membuat draft baru",
+			branchCode, blockingList,
+		)
 	}
 
 	transactionNumber, err := GenerateTransactionNumber(userID, TxStockOpnameFlow)
 	if err != nil {
 		return nil, err
 	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
 
 	transaction := models.Transaction{
 		TransactionNumber: transactionNumber,
@@ -59,87 +131,29 @@ func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest
 		CreatedBy:         userID,
 	}
 
-	if err := config.DB.Create(&transaction).Error; err != nil {
+	if err := tx.Create(&transaction).Error; err != nil {
+		tx.Rollback()
 		return nil, err
 	}
 
-	return GetStockOpnameFlowDetail(transactionNumber)
-}
-
-// ============================================================
-// ADD ASSET KE DRAFT
-// ============================================================
-
-func AddAssetToStockOpname(userID string, transactionNumber string, req dto.AddStockOpnameAssetRequest) (*dto.StockOpnameFlowDetailResponse, error) {
-	transaction, err := getStockOpnameTransaction(transactionNumber)
-	if err != nil {
-		return nil, err
-	}
-
-	if transaction.CurrentStage != models.StageDraft {
-		return nil, errors.New("can only add assets to DRAFT stock opnames")
-	}
-
-	if transaction.CreatedBy != userID {
-		return nil, errors.New("you can only modify your own stock opname draft")
-	}
-
-	var asset models.Asset
-	if err := config.DB.First(&asset, req.AssetID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("asset not found: %d", req.AssetID)
+	for _, asset := range branchAssets {
+		if busyAssetIDs[asset.ID] {
+			continue
 		}
-		return nil, err
+		item := models.TransactionStockOpname{
+			TransactionID:     transaction.ID,
+			TransactionNumber: transactionNumber,
+			AssetID:           asset.ID,
+			AssetNumber:       asset.AssetNumber,
+			AssetStatus:       asset.AssetStatus, // default awal, diedit lewat UpdateStockOpnameFinding
+		}
+		if err := tx.Create(&item).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to add asset %s to draft: %w", asset.AssetNumber, err)
+		}
 	}
 
-	if asset.AssetNumber != req.AssetNumber {
-		return nil, errors.New("asset number mismatch")
-	}
-
-	if asset.AssetStatus == models.AssetStatusDisposed {
-		return nil, fmt.Errorf("asset %s is already disposed, cannot be opnamed", req.AssetNumber)
-	}
-
-	// Asset harus di branch yang sama dengan homebase aktif pembuat opname
-	homebase, err := GetUserActiveHomebase(userID)
-	if err != nil {
-		return nil, err
-	}
-	if asset.BranchCode == nil || *asset.BranchCode != homebase.Branch.BranchCode {
-		return nil, fmt.Errorf("asset %s is not in your branch", req.AssetNumber)
-	}
-
-	// Cek asset belum ada di draft ini
-	var existingCount int64
-	config.DB.Model(&models.TransactionStockOpname{}).
-		Where("transaction_id = ? AND asset_id = ?", transaction.ID, req.AssetID).
-		Count(&existingCount)
-	if existingCount > 0 {
-		return nil, fmt.Errorf("asset %s already added to this stock opname", req.AssetNumber)
-	}
-
-	// Cek asset tidak sedang dihitung di stock opname lain yang masih berjalan
-	var otherOpnameCount int64
-	config.DB.Model(&models.TransactionStockOpname{}).
-		Joins("JOIN transactions ON transactions.id = transaction_stock_opnames.transaction_id").
-		Where("transaction_stock_opnames.asset_id = ? AND transactions.transaction_type = ? AND transactions.id != ? AND transactions.current_stage NOT IN ?",
-			req.AssetID, TxStockOpnameFlow, transaction.ID,
-			[]string{models.StageFinished, models.StageRejected},
-		).
-		Count(&otherOpnameCount)
-	if otherOpnameCount > 0 {
-		return nil, fmt.Errorf("asset %s is already in another active stock opname", req.AssetNumber)
-	}
-
-	item := models.TransactionStockOpname{
-		TransactionID:     transaction.ID,
-		TransactionNumber: transactionNumber,
-		AssetID:           asset.ID,
-		AssetNumber:       asset.AssetNumber,
-		AssetStatus:       asset.AssetStatus, // default awal, diedit lewat UpdateStockOpnameFinding
-	}
-
-	if err := config.DB.Create(&item).Error; err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return nil, err
 	}
 
@@ -149,6 +163,20 @@ func AddAssetToStockOpname(userID string, transactionNumber string, req dto.AddS
 // ============================================================
 // INPUT / UPDATE TEMUAN FISIK (masih DRAFT)
 // ============================================================
+
+// validateFindingPhysicalConditionPair mencegah kombinasi yang gak mungkin
+// terjadi: kalau fisik aset "Tidak Ada" (MISSING), kondisinya wajib
+// "Tidak Ada" (NOT_APPLICABLE) — dan sebaliknya, kalau fisiknya "Ada"
+// (EXISTS), kondisinya gak boleh NOT_APPLICABLE karena harus dinilai.
+func validateFindingPhysicalConditionPair(physicalStatus, condition string) error {
+	if physicalStatus == "MISSING" && condition != "NOT_APPLICABLE" {
+		return errors.New("condition must be NOT_APPLICABLE when physical_status is MISSING")
+	}
+	if physicalStatus == "EXISTS" && condition == "NOT_APPLICABLE" {
+		return errors.New("condition cannot be NOT_APPLICABLE when physical_status is EXISTS")
+	}
+	return nil
+}
 
 func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.UpdateStockOpnameFindingRequest) (*dto.StockOpnameFlowDetailResponse, error) {
 	transaction, err := getStockOpnameTransaction(transactionNumber)
@@ -162,6 +190,10 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 
 	if transaction.CreatedBy != userID {
 		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	if err := validateFindingPhysicalConditionPair(req.PhysicalStatus, req.Condition); err != nil {
+		return nil, err
 	}
 
 	var item models.TransactionStockOpname
@@ -186,37 +218,6 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 		"notes":           req.Notes,
 	}).Error; err != nil {
 		return nil, err
-	}
-
-	return GetStockOpnameFlowDetail(transactionNumber)
-}
-
-// ============================================================
-// REMOVE ASSET DARI DRAFT
-// ============================================================
-
-func RemoveAssetFromStockOpname(userID string, transactionNumber string, req dto.RemoveStockOpnameAssetRequest) (*dto.StockOpnameFlowDetailResponse, error) {
-	transaction, err := getStockOpnameTransaction(transactionNumber)
-	if err != nil {
-		return nil, err
-	}
-
-	if transaction.CurrentStage != models.StageDraft {
-		return nil, errors.New("can only remove assets from DRAFT stock opnames")
-	}
-
-	if transaction.CreatedBy != userID {
-		return nil, errors.New("you can only modify your own stock opname draft")
-	}
-
-	result := config.DB.
-		Where("transaction_id = ? AND asset_id = ?", transaction.ID, req.AssetID).
-		Delete(&models.TransactionStockOpname{})
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return nil, errors.New("asset not found in this stock opname")
 	}
 
 	return GetStockOpnameFlowDetail(transactionNumber)
@@ -700,4 +701,276 @@ func GetAllStockOpnameDrafts(filter StockOpnameListFilter) ([]dto.StockOpnameFlo
 	}
 
 	return responses, total, nil
+}
+
+// ============================================================
+// EXCEL TEMPLATE — label <-> enum mapping
+// Dipakai bersama oleh download (enum -> label) dan upload (label -> enum).
+// ============================================================
+
+var stockOpnamePhysicalStatusLabel = map[string]string{
+	"EXISTS":  "Ada",
+	"MISSING": "Tidak Ada",
+}
+
+var stockOpnamePhysicalStatusValue = map[string]string{
+	"ada":       "EXISTS",
+	"tidak ada": "MISSING",
+}
+
+var stockOpnameConditionLabel = map[string]string{
+	"GOOD":           "Baik",
+	"FAIR":           "Cukup",
+	"POOR":           "Kurang",
+	"BROKEN":         "Rusak Berat",
+	"NOT_APPLICABLE": "Tidak Ada",
+}
+
+var stockOpnameConditionValue = map[string]string{
+	"baik":        "GOOD",
+	"cukup":       "FAIR",
+	"kurang":      "POOR",
+	"rusak berat": "BROKEN",
+	"tidak ada":   "NOT_APPLICABLE",
+}
+
+var stockOpnameAssetStatusLabel = map[string]string{
+	"ACTIVE":      "Aktif",
+	"INACTIVE":    "Tidak Aktif",
+	"MAINTENANCE": "Maintenance",
+	"RETIRED":     "Retired",
+}
+
+var stockOpnameAssetStatusValue = map[string]string{
+	"aktif":       "ACTIVE",
+	"tidak aktif": "INACTIVE",
+	"maintenance": "MAINTENANCE",
+	"retired":     "RETIRED",
+}
+
+const stockOpnameTemplateSheet = "Stock Opname"
+
+// ============================================================
+// EXCEL TEMPLATE — DOWNLOAD
+// Snapshot semua asset di draft + temuan yang udah keisi (kalau ada),
+// dipakai user sebagai template buat diisi/diedit lalu diupload balik.
+// ============================================================
+
+func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*excelize.File, string, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, "", err
+	}
+	if transaction.CreatedBy != userID {
+		return nil, "", errors.New("you can only download the template for your own stock opname draft")
+	}
+
+	var items []models.TransactionStockOpname
+	if err := config.DB.
+		Preload("Asset.Category").
+		Where("transaction_id = ?", transaction.ID).
+		Order("asset_number ASC").
+		Find(&items).Error; err != nil {
+		return nil, "", err
+	}
+
+	f := excelize.NewFile()
+	f.SetSheetName("Sheet1", stockOpnameTemplateSheet)
+
+	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	headers := []string{
+		"No", "Nomor Asset", "Nama Asset", "Kategori",
+		"Status Fisik (Ada/Tidak Ada)",
+		"Kondisi (Baik/Cukup/Kurang/Rusak Berat/Tidak Ada)",
+		"Status Aset (opsional, kosongkan jika tidak berubah)",
+		"Catatan",
+	}
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(stockOpnameTemplateSheet, cell, h)
+		f.SetCellStyle(stockOpnameTemplateSheet, cell, cell, headerStyle)
+	}
+
+	for i, item := range items {
+		row := i + 2
+		assetName, categoryName := "", ""
+		if item.Asset != nil {
+			assetName = item.Asset.AssetName
+			if item.Asset.Category != nil {
+				categoryName = item.Asset.Category.CategoryName
+			}
+		}
+		notes := ""
+		if item.Notes != nil {
+			notes = *item.Notes
+		}
+
+		values := []interface{}{
+			i + 1,
+			item.AssetNumber,
+			assetName,
+			categoryName,
+			stockOpnamePhysicalStatusLabel[item.PhysicalStatus],
+			stockOpnameConditionLabel[item.Condition],
+			stockOpnameAssetStatusLabel[item.AssetStatus],
+			notes,
+		}
+		for col, v := range values {
+			cell, _ := excelize.CoordinatesToCellName(col+1, row)
+			f.SetCellValue(stockOpnameTemplateSheet, cell, v)
+		}
+	}
+
+	colWidths := map[string]float64{"A": 6, "B": 18, "C": 28, "D": 18, "E": 26, "F": 36, "G": 40, "H": 40}
+	for col, w := range colWidths {
+		f.SetColWidth(stockOpnameTemplateSheet, col, col, w)
+	}
+
+	safeName := strings.NewReplacer("/", "-", " ", "_").Replace(transactionNumber)
+	filename := fmt.Sprintf("stock_opname_template_%s.xlsx", safeName)
+	return f, filename, nil
+}
+
+// ============================================================
+// EXCEL TEMPLATE — UPLOAD
+// Bulk update temuan berdasarkan file yang diisi user. Partial update:
+// baris valid langsung disimpan, baris invalid dikumpulkan sebagai error
+// report (gak menggagalkan keseluruhan proses).
+// ============================================================
+
+func cellAt(row []string, idx int) string {
+	if idx < 0 || idx >= len(row) {
+		return ""
+	}
+	return strings.TrimSpace(row[idx])
+}
+
+func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.Reader) (*dto.StockOpnameTemplateUploadResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only upload findings for DRAFT stock opnames")
+	}
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	xf, err := excelize.OpenReader(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read excel file: %w", err)
+	}
+	defer xf.Close()
+
+	sheet := xf.GetSheetName(0)
+	rows, err := xf.GetRows(sheet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read excel rows: %w", err)
+	}
+
+	var items []models.TransactionStockOpname
+	if err := config.DB.Where("transaction_id = ?", transaction.ID).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	itemByAssetNumber := make(map[string]models.TransactionStockOpname, len(items))
+	for _, item := range items {
+		itemByAssetNumber[item.AssetNumber] = item
+	}
+
+	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
+
+	for i, row := range rows {
+		rowNum := i + 1
+		if rowNum == 1 {
+			continue // header
+		}
+
+		assetNumber := cellAt(row, 1)
+		if assetNumber == "" {
+			continue // baris kosong, skip diam-diam
+		}
+
+		item, ok := itemByAssetNumber[assetNumber]
+		if !ok {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: "asset tidak ditemukan di stock opname ini",
+			})
+			continue
+		}
+
+		physicalLabel := strings.ToLower(cellAt(row, 4))
+		conditionLabel := strings.ToLower(cellAt(row, 5))
+		assetStatusLabel := strings.ToLower(cellAt(row, 6))
+		notesCell := cellAt(row, 7)
+
+		physicalStatus, ok := stockOpnamePhysicalStatusValue[physicalLabel]
+		if !ok {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: fmt.Sprintf("status fisik tidak valid: %q (harus Ada / Tidak Ada)", cellAt(row, 4)),
+			})
+			continue
+		}
+
+		condition, ok := stockOpnameConditionValue[conditionLabel]
+		if !ok {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: fmt.Sprintf("kondisi tidak valid: %q", cellAt(row, 5)),
+			})
+			continue
+		}
+
+		if err := validateFindingPhysicalConditionPair(physicalStatus, condition); err != nil {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: err.Error(),
+			})
+			continue
+		}
+
+		assetStatus := item.AssetStatus
+		if assetStatusLabel != "" {
+			mapped, ok := stockOpnameAssetStatusValue[assetStatusLabel]
+			if !ok {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: assetNumber,
+					Message: fmt.Sprintf("status aset tidak valid: %q", cellAt(row, 6)),
+				})
+				continue
+			}
+			assetStatus = mapped
+		}
+
+		updates := map[string]interface{}{
+			"physical_status": physicalStatus,
+			"condition":       condition,
+			"asset_status":    assetStatus,
+			"notes":           notesCell,
+		}
+
+		if err := config.DB.Model(&models.TransactionStockOpname{}).
+			Where("id = ?", item.ID).
+			Updates(updates).Error; err != nil {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: "gagal menyimpan: " + err.Error(),
+			})
+			continue
+		}
+
+		response.UpdatedCount++
+	}
+
+	response.FailedCount = len(response.Errors)
+
+	detail, err := GetStockOpnameFlowDetail(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	response.Detail = detail
+
+	return response, nil
 }

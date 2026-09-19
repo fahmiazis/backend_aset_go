@@ -24,20 +24,22 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 
 		stockOpnameDraft := stockOpname.Group("/draft")
 		{
-			// POST   /transactions/stock-opname/draft/add-asset?transaction_number      → tambah asset ke draft
-			// PUT    /transactions/stock-opname/draft/update-finding?transaction_number → isi/update temuan fisik per asset
-			// DELETE /transactions/stock-opname/draft/remove-asset?transaction_number   → hapus asset dari draft
-			stockOpnameDraft.POST("/add-asset",
-				middleware.RequirePermission("create_transaction"),
-				controllers.AddAssetToStockOpname)
-
+			// PUT /transactions/stock-opname/draft/update-finding?transaction_number → isi/update temuan fisik per asset
+			// Asset list SEKARANG otomatis terisi semua asset di branch homebase
+			// aktif si creator saat draft dibuat — tidak ada lagi add/remove manual.
 			stockOpnameDraft.PUT("/update-finding",
 				middleware.RequirePermission("create_transaction"),
 				controllers.UpdateStockOpnameFinding)
 
-			stockOpnameDraft.DELETE("/remove-asset",
+			// GET  /transactions/stock-opname/draft/template/download?transaction_number → download template excel
+			// POST /transactions/stock-opname/draft/template/upload?transaction_number   → bulk update temuan dari excel
+			stockOpnameDraft.GET("/template/download",
 				middleware.RequirePermission("create_transaction"),
-				controllers.RemoveAssetFromStockOpname)
+				controllers.DownloadStockOpnameTemplate)
+
+			stockOpnameDraft.POST("/template/upload",
+				middleware.RequirePermission("create_transaction"),
+				controllers.UploadStockOpnameTemplate)
 
 			// POST /transactions/stock-opname/draft/submit?transaction_number → DRAFT → APPROVAL
 			stockOpnameDraft.POST("/submit",

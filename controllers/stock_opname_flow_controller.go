@@ -89,29 +89,6 @@ func GetAllStockOpnamesFlow(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Stock opnames retrieved successfully", response)
 }
 
-func AddAssetToStockOpname(c *gin.Context) {
-	userID := c.GetString("user_id")
-	transactionNumber := c.Query("transaction_number")
-	if transactionNumber == "" {
-		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
-		return
-	}
-
-	var req dto.AddStockOpnameAssetRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.ValidationErrorResponse(c, err)
-		return
-	}
-
-	result, err := services.AddAssetToStockOpname(userID, transactionNumber, req)
-	if err != nil {
-		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	utils.SuccessResponse(c, http.StatusOK, "Asset added to stock opname successfully", result)
-}
-
 func UpdateStockOpnameFinding(c *gin.Context) {
 	userID := c.GetString("user_id")
 	transactionNumber := c.Query("transaction_number")
@@ -135,7 +112,11 @@ func UpdateStockOpnameFinding(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Stock opname finding updated successfully", result)
 }
 
-func RemoveAssetFromStockOpname(c *gin.Context) {
+// ============================================================
+// EXCEL TEMPLATE (download + bulk update via upload)
+// ============================================================
+
+func DownloadStockOpnameTemplate(c *gin.Context) {
 	userID := c.GetString("user_id")
 	transactionNumber := c.Query("transaction_number")
 	if transactionNumber == "" {
@@ -143,19 +124,42 @@ func RemoveAssetFromStockOpname(c *gin.Context) {
 		return
 	}
 
-	var req dto.RemoveStockOpnameAssetRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.ValidationErrorResponse(c, err)
-		return
-	}
-
-	result, err := services.RemoveAssetFromStockOpname(userID, transactionNumber, req)
+	file, filename, err := services.GenerateStockOpnameTemplateExcel(userID, transactionNumber)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	utils.SuccessResponse(c, http.StatusOK, "Asset removed from stock opname successfully", result)
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	if err := file.Write(c.Writer); err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, "failed to write excel file: "+err.Error())
+		return
+	}
+}
+
+func UploadStockOpnameTemplate(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	result, err := services.ProcessStockOpnameTemplateUpload(userID, transactionNumber, file)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname template processed successfully", result)
 }
 
 // ============================================================
