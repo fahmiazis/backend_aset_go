@@ -4,13 +4,20 @@ import (
 	"backend-go/config"
 	"backend-go/dto"
 	"backend-go/models"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/rwcarlsen/goexif/exif"
 	"github.com/xuri/excelize/v2"
 	"gorm.io/gorm"
 )
@@ -384,9 +391,22 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 	if len(items) == 0 {
 		return nil, errors.New("cannot submit stock opname with no assets")
 	}
+
+	var photoRows []uint
+	config.DB.Model(&models.StockOpnameAssetPhoto{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("transaction_stock_opname_id", &photoRows)
+	hasPhoto := make(map[uint]bool, len(photoRows))
+	for _, id := range photoRows {
+		hasPhoto[id] = true
+	}
+
 	for _, item := range items {
 		if item.PhysicalStatus == "" || item.Condition == "" {
 			return nil, fmt.Errorf("finding not yet filled for asset %s", item.AssetNumber)
+		}
+		if !hasPhoto[item.ID] {
+			return nil, fmt.Errorf("foto bukti fisik belum dilampirkan untuk asset %s", item.AssetNumber)
 		}
 	}
 
@@ -714,9 +734,16 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 		Order("created_at ASC").
 		Find(&stages)
 
+	var photos []models.StockOpnameAssetPhoto
+	config.DB.Where("transaction_id = ?", transaction.ID).Find(&photos)
+	photoByItemID := make(map[uint]models.StockOpnameAssetPhoto, len(photos))
+	for _, p := range photos {
+		photoByItemID[p.TransactionStockOpnameID] = p
+	}
+
 	itemResponses := make([]dto.StockOpnameFlowItemResponse, len(items))
 	for i, item := range items {
-		itemResponses[i] = buildStockOpnameItemResponse(item)
+		itemResponses[i] = buildStockOpnameItemResponse(item, photoByItemID[item.ID])
 	}
 
 	return &dto.StockOpnameFlowDetailResponse{
@@ -728,7 +755,8 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 
 // buildStockOpnameItemResponse menggabungkan temuan auditor (item) dengan
 // data sistem aktif saat ini (asset + active asset_value) untuk perbandingan.
-func buildStockOpnameItemResponse(item models.TransactionStockOpname) dto.StockOpnameFlowItemResponse {
+// photo.ID == 0 berarti belum ada foto buat item ini.
+func buildStockOpnameItemResponse(item models.TransactionStockOpname, photo models.StockOpnameAssetPhoto) dto.StockOpnameFlowItemResponse {
 	resp := dto.StockOpnameFlowItemResponse{
 		ID:                item.ID,
 		TransactionID:     item.TransactionID,
@@ -765,6 +793,13 @@ func buildStockOpnameItemResponse(item models.TransactionStockOpname) dto.StockO
 		First(&currentValue).Error; err == nil {
 		resp.SystemCondition = currentValue.Condition
 		resp.SystemPhysicalStatus = currentValue.PhysicalStatus
+	}
+
+	if photo.ID != 0 {
+		resp.PhotoID = &photo.ID
+		url := fmt.Sprintf("/api/v1/transactions/stock-opname/photo/%d/file", photo.ID)
+		resp.PhotoURL = &url
+		resp.PhotoCapturedAt = &photo.CapturedAt
 	}
 
 	return resp
@@ -1108,4 +1143,169 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 	response.Detail = detail
 
 	return response, nil
+}
+
+// ============================================================
+// FOTO BUKTI FISIK PER ASSET
+//
+// Wajib diisi sebelum submit (lihat SubmitStockOpname). Divalidasi 3
+// lapis: ukuran file, tanggal pengambilan foto (EXIF DateTimeOriginal,
+// maks 10 hari dari sekarang), dan foto gak boleh dipakai dobel buat
+// asset lain di stock opname yang sama (dicek lewat hash SHA-256 isi
+// file). Satu asset cuma boleh punya 1 foto aktif — upload ulang
+// menimpa foto sebelumnya.
+// ============================================================
+
+const (
+	stockOpnamePhotoMaxSize    = 2 * 1024 * 1024 // 2MB — biar enteng buat testing/upload dari lapangan
+	stockOpnamePhotoMaxAge     = 10 * 24 * time.Hour
+	stockOpnamePhotoStorageDir = "uploads/stock_opname_photos"
+)
+
+// extractPhotoCapturedAt baca tanggal EXIF DateTimeOriginal dari isi file JPEG.
+// Foto hasil forward/kompres WhatsApp & sejenisnya biasanya EXIF-nya udah
+// kehapus otomatis — itu bakal ditolak di sini dengan pesan yang jelas,
+// bukan cuma "invalid file".
+func extractPhotoCapturedAt(data []byte) (time.Time, error) {
+	x, err := exif.Decode(bytes.NewReader(data))
+	if err != nil {
+		return time.Time{}, errors.New("foto tidak punya data EXIF (kemungkinan bukan foto asli dari kamera, atau EXIF-nya sudah hilang karena dikompres/forward lewat aplikasi chat) — upload foto asli dari kamera/galeri HP")
+	}
+	capturedAt, err := x.DateTime()
+	if err != nil {
+		return time.Time{}, errors.New("data EXIF ada tapi tanggal pengambilan foto (DateTimeOriginal) tidak ditemukan di dalamnya")
+	}
+	return capturedAt, nil
+}
+
+func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetID uint, file multipart.File, header *multipart.FileHeader) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only upload photos on DRAFT stock opnames")
+	}
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	if header.Size > stockOpnamePhotoMaxSize {
+		return nil, fmt.Errorf("ukuran foto maksimal 2MB (file ini %.2f MB)", float64(header.Size)/1024/1024)
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".jpg" && ext != ".jpeg" {
+		return nil, errors.New("foto harus format JPEG (.jpg/.jpeg) supaya tanggal pengambilannya bisa divalidasi")
+	}
+
+	var item models.TransactionStockOpname
+	if err := config.DB.
+		Where("transaction_id = ? AND asset_id = ?", transaction.ID, assetID).
+		First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("asset not found in this stock opname")
+		}
+		return nil, err
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read uploaded file: %w", err)
+	}
+	if int64(len(data)) > stockOpnamePhotoMaxSize {
+		return nil, fmt.Errorf("ukuran foto maksimal 2MB (file ini %.2f MB)", float64(len(data))/1024/1024)
+	}
+
+	capturedAt, err := extractPhotoCapturedAt(data)
+	if err != nil {
+		return nil, err
+	}
+	if time.Since(capturedAt) > stockOpnamePhotoMaxAge {
+		return nil, fmt.Errorf("foto ini diambil tanggal %s, sudah lebih dari 10 hari dari sekarang — upload foto yang lebih baru", capturedAt.Format("02 Jan 2006"))
+	}
+	if capturedAt.After(time.Now().Add(1 * time.Hour)) {
+		return nil, errors.New("tanggal pengambilan foto ada di masa depan — cek pengaturan tanggal/jam kamera atau HP kamu")
+	}
+
+	hashBytes := sha256.Sum256(data)
+	hashHex := hex.EncodeToString(hashBytes[:])
+
+	var dupCount int64
+	config.DB.Model(&models.StockOpnameAssetPhoto{}).
+		Where("transaction_id = ? AND file_hash = ? AND transaction_stock_opname_id != ?", transaction.ID, hashHex, item.ID).
+		Count(&dupCount)
+	if dupCount > 0 {
+		return nil, errors.New("foto ini sudah dipakai buat asset lain di stock opname ini — tiap asset wajib pakai foto yang berbeda")
+	}
+
+	dir := filepath.Join(stockOpnamePhotoStorageDir, sanitizePathSegment(transactionNumber))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to prepare storage directory: %w", err)
+	}
+
+	baseName := sanitizePathSegment(strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename)))
+	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), baseName, ext)
+	fullPath := filepath.Join(dir, fileName)
+	if err := os.WriteFile(fullPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("failed to save file: %w", err)
+	}
+
+	var existing models.StockOpnameAssetPhoto
+	err = config.DB.Where("transaction_stock_opname_id = ?", item.ID).First(&existing).Error
+	switch {
+	case err == nil:
+		oldPath := existing.FilePath
+		if updateErr := config.DB.Model(&existing).Updates(map[string]interface{}{
+			"file_name":   header.Filename,
+			"file_path":   fullPath,
+			"file_size":   int64(len(data)),
+			"file_hash":   hashHex,
+			"captured_at": capturedAt,
+			"uploaded_by": userID,
+		}).Error; updateErr != nil {
+			os.Remove(fullPath)
+			return nil, updateErr
+		}
+		if oldPath != "" && oldPath != fullPath {
+			os.Remove(oldPath) // best-effort, file lama gak dipakai lagi
+		}
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		newPhoto := models.StockOpnameAssetPhoto{
+			TransactionStockOpnameID: item.ID,
+			TransactionID:            transaction.ID,
+			AssetID:                  assetID,
+			FileName:                 header.Filename,
+			FilePath:                 fullPath,
+			FileSize:                 int64(len(data)),
+			FileHash:                 hashHex,
+			CapturedAt:               capturedAt,
+			UploadedBy:               userID,
+		}
+		if createErr := config.DB.Create(&newPhoto).Error; createErr != nil {
+			os.Remove(fullPath)
+			return nil, createErr
+		}
+	default:
+		os.Remove(fullPath)
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// GetStockOpnameAssetPhotoFilePath dipakai controller buat serve file foto.
+func GetStockOpnameAssetPhotoFilePath(photoID uint) (string, string, error) {
+	var photo models.StockOpnameAssetPhoto
+	if err := config.DB.First(&photo, photoID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", "", errors.New("photo not found")
+		}
+		return "", "", err
+	}
+	if _, err := os.Stat(photo.FilePath); err != nil {
+		return "", "", errors.New("photo file not found on disk")
+	}
+	return photo.FilePath, photo.FileName, nil
 }

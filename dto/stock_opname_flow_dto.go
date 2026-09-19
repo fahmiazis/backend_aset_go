@@ -111,6 +111,11 @@ type StockOpnameFlowItemResponse struct {
 	SystemCondition      *string `json:"system_condition,omitempty"`
 	SystemAssetStatus    string  `json:"system_asset_status,omitempty"`
 
+	// Foto bukti fisik — wajib diisi sebelum submit (lihat SubmitStockOpname)
+	PhotoID         *uint      `json:"photo_id,omitempty"`
+	PhotoURL        *string    `json:"photo_url,omitempty"`
+	PhotoCapturedAt *time.Time `json:"photo_captured_at,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

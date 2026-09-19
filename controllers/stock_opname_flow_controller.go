@@ -286,3 +286,55 @@ func RejectStockOpname(c *gin.Context) {
 
 	utils.SuccessResponse(c, http.StatusOK, "Stock opname rejected", result)
 }
+
+// ============================================================
+// FOTO BUKTI FISIK PER ASSET
+// ============================================================
+
+func UploadStockOpnameAssetPhoto(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	assetID, err := strconv.ParseUint(c.PostForm("asset_id"), 10, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "asset_id is required and must be numeric")
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	result, err := services.UploadStockOpnameAssetPhoto(userID, transactionNumber, uint(assetID), file, header)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Photo uploaded successfully", result)
+}
+
+func ServeStockOpnameAssetPhoto(c *gin.Context) {
+	photoID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "invalid photo id")
+		return
+	}
+
+	path, _, err := services.GetStockOpnameAssetPhotoFilePath(uint(photoID))
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// Inline (bukan attachment) biar bisa langsung dipakai sebagai <img src>
+	// buat thumbnail di modal/grid, bukan trigger download.
+	c.File(path)
+}

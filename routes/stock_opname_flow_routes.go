@@ -22,6 +22,9 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 
 		stockOpname.GET("/detail", controllers.GetStockOpnameFlowDetail)
 
+		// GET /transactions/stock-opname/photo/:id/file → serve foto (inline), gak dibatasi stage
+		stockOpname.GET("/photo/:id/file", controllers.ServeStockOpnameAssetPhoto)
+
 		stockOpnameDraft := stockOpname.Group("/draft")
 		{
 			// PUT /transactions/stock-opname/draft/update-finding?transaction_number → isi/update temuan fisik per asset
@@ -35,6 +38,11 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 			stockOpnameDraft.PUT("/bulk-update-finding",
 				middleware.RequirePermission("create_transaction"),
 				controllers.BulkUpdateStockOpnameFinding)
+
+			// POST /transactions/stock-opname/draft/photo/upload?transaction_number → upload/replace foto bukti fisik 1 asset
+			stockOpnameDraft.POST("/photo/upload",
+				middleware.RequirePermission("create_transaction"),
+				controllers.UploadStockOpnameAssetPhoto)
 
 			// GET  /transactions/stock-opname/draft/template/download?transaction_number → download template excel
 			// POST /transactions/stock-opname/draft/template/upload?transaction_number   → bulk update temuan dari excel
