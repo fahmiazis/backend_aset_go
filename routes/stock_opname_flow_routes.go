@@ -31,6 +31,11 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 				middleware.RequirePermission("create_transaction"),
 				controllers.UpdateStockOpnameFinding)
 
+			// PUT /transactions/stock-opname/draft/bulk-update-finding?transaction_number → autosave grid "Lengkapi Data"
+			stockOpnameDraft.PUT("/bulk-update-finding",
+				middleware.RequirePermission("create_transaction"),
+				controllers.BulkUpdateStockOpnameFinding)
+
 			// GET  /transactions/stock-opname/draft/template/download?transaction_number → download template excel
 			// POST /transactions/stock-opname/draft/template/upload?transaction_number   → bulk update temuan dari excel
 			stockOpnameDraft.GET("/template/download",

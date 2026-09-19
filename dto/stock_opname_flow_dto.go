@@ -31,6 +31,36 @@ type UpdateStockOpnameFindingRequest struct {
 }
 
 // ============================================================
+// BULK UPDATE TEMUAN (autosave dari grid "Lengkapi Data")
+//
+// Beda dari UpdateStockOpnameFindingRequest: field di sini SEMUA opsional
+// (pointer) karena tiap cell di grid bisa disimpan sendiri-sendiri sambil
+// user masih ngisi cell lain — field yang gak dikirim (nil) berarti "belum
+// berubah", nilai lama di DB dipertahankan. Validasi pasangan
+// physical_status/condition dilakukan di service terhadap nilai EFEKTIF
+// (gabungan nilai baru + nilai lama yang belum diubah).
+//
+// SENGAJA gak pakai binding:"oneof=..." di sini (beda dari
+// UpdateStockOpnameFindingRequest) — pointer non-nil ke string KOSONG
+// harus tetap valid lolos binding, karena itu representasi "field ini
+// sengaja dikosongkan lagi" (mis. saat physical_status dibalik dari
+// MISSING ke EXISTS, condition ikut direset ke "" di FE supaya user pilih
+// ulang). Validasi non-empty-tapi-invalid ditangani manual di service.
+// ============================================================
+
+type BulkUpdateStockOpnameFindingItem struct {
+	AssetID        uint    `json:"asset_id" binding:"required"`
+	PhysicalStatus *string `json:"physical_status"`
+	Condition      *string `json:"condition"`
+	AssetStatus    *string `json:"asset_status"`
+	Notes          *string `json:"notes"`
+}
+
+type BulkUpdateStockOpnameFindingRequest struct {
+	Items []BulkUpdateStockOpnameFindingItem `json:"items" binding:"required,min=1,dive"`
+}
+
+// ============================================================
 // SUBMIT
 // ============================================================
 

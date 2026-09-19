@@ -112,6 +112,29 @@ func UpdateStockOpnameFinding(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Stock opname finding updated successfully", result)
 }
 
+func BulkUpdateStockOpnameFinding(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.BulkUpdateStockOpnameFindingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.BulkUpdateStockOpnameFinding(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname findings saved successfully", result)
+}
+
 // ============================================================
 // EXCEL TEMPLATE (download + bulk update via upload)
 // ============================================================

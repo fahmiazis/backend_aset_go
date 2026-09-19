@@ -223,6 +223,141 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 	return GetStockOpnameFlowDetail(transactionNumber)
 }
 
+// BulkUpdateStockOpnameFinding dipakai autosave grid "Lengkapi Data" —
+// menyimpan banyak asset sekaligus dalam satu request (biasanya dipanggil
+// tiap beberapa detik dari FE, bukan tiap keystroke). Partial update per
+// item, sama semantiknya kayak upload excel: baris valid tetap kesimpen,
+// baris invalid dikumpulkan sebagai error report tanpa gagalin baris lain.
+func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req dto.BulkUpdateStockOpnameFindingRequest) (*dto.StockOpnameTemplateUploadResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only update findings on DRAFT stock opnames")
+	}
+
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	var existing []models.TransactionStockOpname
+	if err := config.DB.Where("transaction_id = ?", transaction.ID).Find(&existing).Error; err != nil {
+		return nil, err
+	}
+	byAssetID := make(map[uint]models.TransactionStockOpname, len(existing))
+	for _, item := range existing {
+		byAssetID[item.AssetID] = item
+	}
+
+	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
+
+	for i, reqItem := range req.Items {
+		rowNum := i + 1
+
+		current, ok := byAssetID[reqItem.AssetID]
+		if !ok {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: fmt.Sprintf("asset_id=%d", reqItem.AssetID),
+				Message: "asset not found in this stock opname",
+			})
+			continue
+		}
+
+		// Value non-empty tapi gak dikenal enum-nya ditolak; string kosong
+		// selalu diloloskan di sini (representasi "field sengaja dikosongkan
+		// lagi" saat user ganti pilihan) — lihat komentar di dto.
+		if reqItem.PhysicalStatus != nil && *reqItem.PhysicalStatus != "" {
+			if _, ok := stockOpnamePhysicalStatusLabel[*reqItem.PhysicalStatus]; !ok {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: current.AssetNumber,
+					Message: fmt.Sprintf("status fisik tidak valid: %q", *reqItem.PhysicalStatus),
+				})
+				continue
+			}
+		}
+		if reqItem.Condition != nil && *reqItem.Condition != "" {
+			if _, ok := stockOpnameConditionLabel[*reqItem.Condition]; !ok {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: current.AssetNumber,
+					Message: fmt.Sprintf("kondisi tidak valid: %q", *reqItem.Condition),
+				})
+				continue
+			}
+		}
+		if reqItem.AssetStatus != nil && *reqItem.AssetStatus != "" {
+			if _, ok := stockOpnameAssetStatusLabel[*reqItem.AssetStatus]; !ok {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: current.AssetNumber,
+					Message: fmt.Sprintf("status aset tidak valid: %q", *reqItem.AssetStatus),
+				})
+				continue
+			}
+		}
+
+		effectivePhysical := current.PhysicalStatus
+		if reqItem.PhysicalStatus != nil {
+			effectivePhysical = *reqItem.PhysicalStatus
+		}
+		effectiveCondition := current.Condition
+		if reqItem.Condition != nil {
+			effectiveCondition = *reqItem.Condition
+		}
+
+		// Cuma divalidasi kalau dua-duanya udah keisi — kalau salah satu
+		// masih kosong berarti user masih di tengah proses ngisi cell lain,
+		// belum saatnya divalidasi silang.
+		if effectivePhysical != "" && effectiveCondition != "" {
+			if err := validateFindingPhysicalConditionPair(effectivePhysical, effectiveCondition); err != nil {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: current.AssetNumber, Message: err.Error(),
+				})
+				continue
+			}
+		}
+
+		updates := map[string]interface{}{}
+		if reqItem.PhysicalStatus != nil {
+			updates["physical_status"] = *reqItem.PhysicalStatus
+		}
+		if reqItem.Condition != nil {
+			updates["condition"] = *reqItem.Condition
+		}
+		if reqItem.AssetStatus != nil {
+			updates["asset_status"] = *reqItem.AssetStatus
+		}
+		if reqItem.Notes != nil {
+			updates["notes"] = *reqItem.Notes
+		}
+
+		if len(updates) == 0 {
+			continue
+		}
+
+		if err := config.DB.Model(&models.TransactionStockOpname{}).
+			Where("id = ?", current.ID).
+			Updates(updates).Error; err != nil {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: current.AssetNumber, Message: "gagal menyimpan: " + err.Error(),
+			})
+			continue
+		}
+
+		response.UpdatedCount++
+	}
+
+	response.FailedCount = len(response.Errors)
+
+	detail, err := GetStockOpnameFlowDetail(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	response.Detail = detail
+
+	return response, nil
+}
+
 // ============================================================
 // SUBMIT
 // DRAFT → APPROVAL
