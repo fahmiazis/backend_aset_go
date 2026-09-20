@@ -342,3 +342,51 @@ func ServeStockOpnameAssetPhoto(c *gin.Context) {
 	// buat thumbnail di modal/grid, bukan trigger download.
 	c.File(path)
 }
+
+func UploadStockOpnameBorrowDocument(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	assetID, err := strconv.ParseUint(c.PostForm("asset_id"), 10, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "asset_id is required and must be numeric")
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	result, err := services.UploadStockOpnameBorrowDocument(userID, transactionNumber, uint(assetID), file, header)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Borrow document uploaded successfully", result)
+}
+
+func ServeStockOpnameBorrowDocument(c *gin.Context) {
+	docID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "invalid document id")
+		return
+	}
+
+	path, fileName, err := services.GetStockOpnameBorrowDocumentFilePath(uint(docID))
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// Inline biar bisa langsung dibuka di tab baru, bukan trigger download.
+	c.Header("Content-Disposition", "inline; filename=\""+fileName+"\"")
+	c.File(path)
+}

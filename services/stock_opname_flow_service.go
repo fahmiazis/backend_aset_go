@@ -170,12 +170,13 @@ func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest
 // ============================================================
 
 // validateFindingPhysicalConditionPair mencegah kombinasi yang gak mungkin
-// terjadi: kalau fisik aset "Tidak Ada" (MISSING), kondisinya wajib
-// "Tidak Ada" (NOT_APPLICABLE) — dan sebaliknya, kalau fisiknya "Ada"
-// (EXISTS), kondisinya gak boleh NOT_APPLICABLE karena harus dinilai.
+// terjadi: kalau fisik aset gak ada di lokasi (MISSING "Tidak Ada" atau
+// BORROWED "Dipinjam"), kondisinya wajib "Tidak Ada" (NOT_APPLICABLE) —
+// dan sebaliknya, kalau fisiknya "Ada" (EXISTS), kondisinya gak boleh
+// NOT_APPLICABLE karena harus dinilai.
 func validateFindingPhysicalConditionPair(physicalStatus, condition string) error {
-	if physicalStatus == "MISSING" && condition != "NOT_APPLICABLE" {
-		return errors.New("condition must be NOT_APPLICABLE when physical_status is MISSING")
+	if (physicalStatus == "MISSING" || physicalStatus == "BORROWED") && condition != "NOT_APPLICABLE" {
+		return fmt.Errorf("condition must be NOT_APPLICABLE when physical_status is %s", physicalStatus)
 	}
 	if physicalStatus == "EXISTS" && condition == "NOT_APPLICABLE" {
 		return errors.New("condition cannot be NOT_APPLICABLE when physical_status is EXISTS")
@@ -209,6 +210,16 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 			return nil, errors.New("asset not found in this stock opname")
 		}
 		return nil, err
+	}
+
+	if req.PhysicalStatus == "BORROWED" {
+		var docCount int64
+		config.DB.Model(&models.StockOpnameBorrowDocument{}).
+			Where("transaction_stock_opname_id = ?", item.ID).
+			Count(&docCount)
+		if docCount == 0 {
+			return nil, errors.New("dokumen peminjaman (PDF) wajib diupload dulu sebelum menyimpan status Dipinjam")
+		}
 	}
 
 	assetStatus := item.AssetStatus
@@ -254,6 +265,15 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 	byAssetID := make(map[uint]models.TransactionStockOpname, len(existing))
 	for _, item := range existing {
 		byAssetID[item.AssetID] = item
+	}
+
+	var borrowDocItemIDs []uint
+	config.DB.Model(&models.StockOpnameBorrowDocument{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("transaction_stock_opname_id", &borrowDocItemIDs)
+	hasBorrowDoc := make(map[uint]bool, len(borrowDocItemIDs))
+	for _, id := range borrowDocItemIDs {
+		hasBorrowDoc[id] = true
 	}
 
 	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
@@ -320,6 +340,14 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 				})
 				continue
 			}
+		}
+
+		if effectivePhysical == "BORROWED" && !hasBorrowDoc[current.ID] {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: current.AssetNumber,
+				Message: "dokumen peminjaman (PDF) wajib diupload dulu sebelum menyimpan status Dipinjam",
+			})
+			continue
 		}
 
 		updates := map[string]interface{}{}
@@ -399,12 +427,24 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		hasPhoto[id] = true
 	}
 
+	var borrowDocRows []uint
+	config.DB.Model(&models.StockOpnameBorrowDocument{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("transaction_stock_opname_id", &borrowDocRows)
+	hasBorrowDoc := make(map[uint]bool, len(borrowDocRows))
+	for _, id := range borrowDocRows {
+		hasBorrowDoc[id] = true
+	}
+
 	for _, item := range items {
 		if item.PhysicalStatus == "" || item.Condition == "" {
 			return nil, fmt.Errorf("finding not yet filled for asset %s", item.AssetNumber)
 		}
 		if !hasPhoto[item.ID] {
 			return nil, fmt.Errorf("foto bukti fisik belum dilampirkan untuk asset %s", item.AssetNumber)
+		}
+		if item.PhysicalStatus == "BORROWED" && !hasBorrowDoc[item.ID] {
+			return nil, fmt.Errorf("dokumen peminjaman belum dilampirkan untuk asset %s", item.AssetNumber)
 		}
 	}
 
@@ -739,9 +779,16 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 		photoByItemID[p.TransactionStockOpnameID] = p
 	}
 
+	var borrowDocs []models.StockOpnameBorrowDocument
+	config.DB.Where("transaction_id = ?", transaction.ID).Find(&borrowDocs)
+	borrowDocByItemID := make(map[uint]models.StockOpnameBorrowDocument, len(borrowDocs))
+	for _, d := range borrowDocs {
+		borrowDocByItemID[d.TransactionStockOpnameID] = d
+	}
+
 	itemResponses := make([]dto.StockOpnameFlowItemResponse, len(items))
 	for i, item := range items {
-		itemResponses[i] = buildStockOpnameItemResponse(item, photoByItemID[item.ID])
+		itemResponses[i] = buildStockOpnameItemResponse(item, photoByItemID[item.ID], borrowDocByItemID[item.ID])
 	}
 
 	return &dto.StockOpnameFlowDetailResponse{
@@ -753,8 +800,9 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 
 // buildStockOpnameItemResponse menggabungkan temuan auditor (item) dengan
 // data sistem aktif saat ini (asset + active asset_value) untuk perbandingan.
-// photo.ID == 0 berarti belum ada foto buat item ini.
-func buildStockOpnameItemResponse(item models.TransactionStockOpname, photo models.StockOpnameAssetPhoto) dto.StockOpnameFlowItemResponse {
+// photo.ID == 0 berarti belum ada foto, borrowDoc.ID == 0 berarti belum ada
+// dokumen peminjaman buat item ini.
+func buildStockOpnameItemResponse(item models.TransactionStockOpname, photo models.StockOpnameAssetPhoto, borrowDoc models.StockOpnameBorrowDocument) dto.StockOpnameFlowItemResponse {
 	resp := dto.StockOpnameFlowItemResponse{
 		ID:                item.ID,
 		TransactionID:     item.TransactionID,
@@ -798,6 +846,13 @@ func buildStockOpnameItemResponse(item models.TransactionStockOpname, photo mode
 		url := fmt.Sprintf("/api/v1/transactions/stock-opname/photo/%d/file", photo.ID)
 		resp.PhotoURL = &url
 		resp.PhotoCapturedAt = &photo.CapturedAt
+	}
+
+	if borrowDoc.ID != 0 {
+		resp.BorrowDocumentID = &borrowDoc.ID
+		url := fmt.Sprintf("/api/v1/transactions/stock-opname/borrow-document/%d/file", borrowDoc.ID)
+		resp.BorrowDocumentURL = &url
+		resp.BorrowDocumentFileName = &borrowDoc.FileName
 	}
 
 	return resp
@@ -877,13 +932,15 @@ func GetAllStockOpnameDrafts(filter StockOpnameListFilter) ([]dto.StockOpnameFlo
 // ============================================================
 
 var stockOpnamePhysicalStatusLabel = map[string]string{
-	"EXISTS":  "Ada",
-	"MISSING": "Tidak Ada",
+	"EXISTS":   "Ada",
+	"MISSING":  "Tidak Ada",
+	"BORROWED": "Dipinjam",
 }
 
 var stockOpnamePhysicalStatusValue = map[string]string{
 	"ada":       "EXISTS",
 	"tidak ada": "MISSING",
+	"dipinjam":  "BORROWED",
 }
 
 var stockOpnameConditionLabel = map[string]string{
@@ -1046,6 +1103,15 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 		itemByAssetNumber[item.AssetNumber] = item
 	}
 
+	var borrowDocItemIDs []uint
+	config.DB.Model(&models.StockOpnameBorrowDocument{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("transaction_stock_opname_id", &borrowDocItemIDs)
+	hasBorrowDoc := make(map[uint]bool, len(borrowDocItemIDs))
+	for _, id := range borrowDocItemIDs {
+		hasBorrowDoc[id] = true
+	}
+
 	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
 
 	for i, row := range rows {
@@ -1077,7 +1143,7 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 		if !ok {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
-				Message: fmt.Sprintf("status fisik tidak valid: %q (harus Ada / Tidak Ada)", cellAt(row, 4)),
+				Message: fmt.Sprintf("status fisik tidak valid: %q (harus Ada / Tidak Ada / Dipinjam)", cellAt(row, 4)),
 			})
 			continue
 		}
@@ -1095,6 +1161,14 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
 				Message: err.Error(),
+			})
+			continue
+		}
+
+		if physicalStatus == "BORROWED" && !hasBorrowDoc[item.ID] {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: "dokumen peminjaman (PDF) wajib diupload dulu lewat aplikasi sebelum status Dipinjam bisa disimpan",
 			})
 			continue
 		}
@@ -1304,4 +1378,127 @@ func GetStockOpnameAssetPhotoFilePath(photoID uint) (string, string, error) {
 		return "", "", errors.New("photo file not found on disk")
 	}
 	return photo.FilePath, photo.FileName, nil
+}
+
+// ============================================================
+// DOKUMEN PEMINJAMAN (PDF) PER ASSET — status fisik BORROWED
+//
+// Wajib diupload sebelum status BORROWED bisa disimpan di
+// UpdateStockOpnameFinding/BulkUpdateStockOpnameFinding/template upload, dan
+// wajib ada sebelum submit (lihat SubmitStockOpname). Satu asset cuma boleh
+// punya 1 dokumen aktif — upload ulang menimpa dokumen sebelumnya.
+//
+// Belum ada config buat ukuran max/dsb (nyusul) — untuk sekarang dipakai
+// batas tetap 5MB, format PDF-only.
+// ============================================================
+
+const (
+	stockOpnameBorrowDocMaxSize    = 5 * 1024 * 1024 // 5MB
+	stockOpnameBorrowDocStorageDir = "uploads/stock_opname_borrow_documents"
+)
+
+func UploadStockOpnameBorrowDocument(userID string, transactionNumber string, assetID uint, file multipart.File, header *multipart.FileHeader) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only upload borrow documents on DRAFT stock opnames")
+	}
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	if header.Size > stockOpnameBorrowDocMaxSize {
+		return nil, fmt.Errorf("ukuran dokumen maksimal 5MB (file ini %.2f MB)", float64(header.Size)/1024/1024)
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".pdf" {
+		return nil, errors.New("dokumen peminjaman harus format PDF")
+	}
+
+	var item models.TransactionStockOpname
+	if err := config.DB.
+		Where("transaction_id = ? AND asset_id = ?", transaction.ID, assetID).
+		First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("asset not found in this stock opname")
+		}
+		return nil, err
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read uploaded file: %w", err)
+	}
+	if int64(len(data)) > stockOpnameBorrowDocMaxSize {
+		return nil, fmt.Errorf("ukuran dokumen maksimal 5MB (file ini %.2f MB)", float64(len(data))/1024/1024)
+	}
+
+	dir := filepath.Join(stockOpnameBorrowDocStorageDir, sanitizePathSegment(transactionNumber))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to prepare storage directory: %w", err)
+	}
+
+	baseName := sanitizePathSegment(strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename)))
+	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), baseName, ext)
+	fullPath := filepath.Join(dir, fileName)
+	if err := os.WriteFile(fullPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("failed to save file: %w", err)
+	}
+
+	var existing models.StockOpnameBorrowDocument
+	err = config.DB.Where("transaction_stock_opname_id = ?", item.ID).First(&existing).Error
+	switch {
+	case err == nil:
+		oldPath := existing.FilePath
+		if updateErr := config.DB.Model(&existing).Updates(map[string]interface{}{
+			"file_name":   header.Filename,
+			"file_path":   fullPath,
+			"file_size":   int64(len(data)),
+			"uploaded_by": userID,
+		}).Error; updateErr != nil {
+			os.Remove(fullPath)
+			return nil, updateErr
+		}
+		if oldPath != "" && oldPath != fullPath {
+			os.Remove(oldPath) // best-effort, file lama gak dipakai lagi
+		}
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		newDoc := models.StockOpnameBorrowDocument{
+			TransactionStockOpnameID: item.ID,
+			TransactionID:            transaction.ID,
+			AssetID:                  assetID,
+			FileName:                 header.Filename,
+			FilePath:                 fullPath,
+			FileSize:                 int64(len(data)),
+			UploadedBy:               userID,
+		}
+		if createErr := config.DB.Create(&newDoc).Error; createErr != nil {
+			os.Remove(fullPath)
+			return nil, createErr
+		}
+	default:
+		os.Remove(fullPath)
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// GetStockOpnameBorrowDocumentFilePath dipakai controller buat serve file dokumen.
+func GetStockOpnameBorrowDocumentFilePath(docID uint) (string, string, error) {
+	var doc models.StockOpnameBorrowDocument
+	if err := config.DB.First(&doc, docID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", "", errors.New("borrow document not found")
+		}
+		return "", "", err
+	}
+	if _, err := os.Stat(doc.FilePath); err != nil {
+		return "", "", errors.New("borrow document file not found on disk")
+	}
+	return doc.FilePath, doc.FileName, nil
 }

@@ -16,15 +16,18 @@ type CreateStockOpnameDraftRequest struct {
 // ============================================================
 // INPUT HASIL TEMUAN FISIK PER ASSET (masih draft)
 //
-// PhysicalStatus hanya 2 opsi: EXISTS ("Ada") / MISSING ("Tidak Ada").
-// Condition punya opsi tambahan NOT_APPLICABLE ("Tidak Ada") yang WAJIB
-// dipakai ketika PhysicalStatus = MISSING (dan hanya boleh dipakai saat
-// itu) — divalidasi silang di service, bukan cuma lewat oneof di sini.
+// PhysicalStatus punya 3 opsi: EXISTS ("Ada") / MISSING ("Tidak Ada") /
+// BORROWED ("Dipinjam"). Condition punya opsi tambahan NOT_APPLICABLE
+// ("Tidak Ada") yang WAJIB dipakai ketika PhysicalStatus = MISSING atau
+// BORROWED (dan hanya boleh dipakai saat itu) — divalidasi silang di
+// service, bukan cuma lewat oneof di sini. Khusus BORROWED, dokumen
+// peminjaman (PDF) wajib sudah diupload lebih dulu lewat endpoint upload
+// terpisah — juga divalidasi di service.
 // ============================================================
 
 type UpdateStockOpnameFindingRequest struct {
 	AssetID        uint    `json:"asset_id" binding:"required"`
-	PhysicalStatus string  `json:"physical_status" binding:"required,oneof=EXISTS MISSING"`
+	PhysicalStatus string  `json:"physical_status" binding:"required,oneof=EXISTS MISSING BORROWED"`
 	Condition      string  `json:"condition" binding:"required,oneof=GOOD FAIR POOR BROKEN NOT_APPLICABLE"`
 	AssetStatus    *string `json:"asset_status" binding:"omitempty,oneof=ACTIVE INACTIVE MAINTENANCE RETIRED"`
 	Notes          *string `json:"notes"`
@@ -115,6 +118,12 @@ type StockOpnameFlowItemResponse struct {
 	PhotoID         *uint      `json:"photo_id,omitempty"`
 	PhotoURL        *string    `json:"photo_url,omitempty"`
 	PhotoCapturedAt *time.Time `json:"photo_captured_at,omitempty"`
+
+	// Dokumen peminjaman (PDF) — wajib diisi kalau FoundPhysicalStatus =
+	// BORROWED, divalidasi juga sebelum submit (lihat SubmitStockOpname)
+	BorrowDocumentID       *uint   `json:"borrow_document_id,omitempty"`
+	BorrowDocumentURL      *string `json:"borrow_document_url,omitempty"`
+	BorrowDocumentFileName *string `json:"borrow_document_file_name,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
