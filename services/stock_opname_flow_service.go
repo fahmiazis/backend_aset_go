@@ -170,12 +170,18 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 	}
 
 	if req.PhysicalStatus == "BORROWED" {
-		var docCount int64
-		config.DB.Model(&models.StockOpnameBorrowDocument{}).
-			Where("transaction_id = ? AND asset_id = ?", transaction.ID, req.AssetID).
-			Count(&docCount)
-		if docCount == 0 {
-			return nil, errors.New("dokumen peminjaman (PDF) wajib diupload dulu sebelum menyimpan status Dipinjam")
+		soCfg, err := getOrCreateStockOpnameConfig()
+		if err != nil {
+			return nil, err
+		}
+		if soCfg.BorrowDocIsRequired {
+			var docCount int64
+			config.DB.Model(&models.StockOpnameBorrowDocument{}).
+				Where("transaction_id = ? AND asset_id = ?", transaction.ID, req.AssetID).
+				Count(&docCount)
+			if docCount == 0 {
+				return nil, errors.New("dokumen peminjaman wajib diupload dulu sebelum menyimpan status Dipinjam")
+			}
 		}
 	}
 
@@ -231,6 +237,11 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 	hasBorrowDoc := make(map[uint]bool, len(borrowDocAssetIDs))
 	for _, id := range borrowDocAssetIDs {
 		hasBorrowDoc[id] = true
+	}
+
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
 	}
 
 	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
@@ -299,10 +310,10 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 			}
 		}
 
-		if effectivePhysical == "BORROWED" && !hasBorrowDoc[current.AssetID] {
+		if effectivePhysical == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[current.AssetID] {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: current.AssetNumber,
-				Message: "dokumen peminjaman (PDF) wajib diupload dulu sebelum menyimpan status Dipinjam",
+				Message: "dokumen peminjaman wajib diupload dulu sebelum menyimpan status Dipinjam",
 			})
 			continue
 		}
@@ -393,6 +404,11 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		hasBorrowDoc[id] = true
 	}
 
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+
 	for _, item := range items {
 		if item.PhysicalStatus == "" || item.Condition == "" {
 			return nil, fmt.Errorf("finding not yet filled for asset %s", item.AssetNumber)
@@ -400,7 +416,7 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		if !hasPhoto[item.AssetID] {
 			return nil, fmt.Errorf("foto bukti fisik belum dilampirkan untuk asset %s", item.AssetNumber)
 		}
-		if item.PhysicalStatus == "BORROWED" && !hasBorrowDoc[item.AssetID] {
+		if item.PhysicalStatus == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
 			return nil, fmt.Errorf("dokumen peminjaman belum dilampirkan untuk asset %s", item.AssetNumber)
 		}
 	}
@@ -433,12 +449,7 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 	// IsSubmissive cuma penanda kepatuhan jadwal (dinilai dari tanggal
 	// SUBMIT, bukan tanggal draft dibuat) — gak pernah menghalangi submit
 	// itu sendiri, submit di luar jendela tetap jalan seperti biasa.
-	submissionCfg, err := getOrCreateStockOpnameConfig()
-	if err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-	isSubmissive := isWithinSubmissionWindow(time.Now(), submissionCfg.SubmissionStartDay, submissionCfg.SubmissionEndDay)
+	isSubmissive := isWithinSubmissionWindow(time.Now(), soCfg.SubmissionStartDay, soCfg.SubmissionEndDay)
 	if err := tx.Model(transaction).Update("is_submissive", isSubmissive).Error; err != nil {
 		tx.Rollback()
 		return nil, err
@@ -1187,6 +1198,11 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 		hasBorrowDoc[id] = true
 	}
 
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+
 	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
 
 	for i, row := range rows {
@@ -1240,10 +1256,10 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 			continue
 		}
 
-		if physicalStatus == "BORROWED" && !hasBorrowDoc[item.AssetID] {
+		if physicalStatus == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
-				Message: "dokumen peminjaman (PDF) wajib diupload dulu lewat aplikasi sebelum status Dipinjam bisa disimpan",
+				Message: "dokumen peminjaman wajib diupload dulu lewat aplikasi sebelum status Dipinjam bisa disimpan",
 			})
 			continue
 		}
@@ -1488,9 +1504,25 @@ func UploadStockOpnameBorrowDocument(userID string, transactionNumber string, as
 		return nil, fmt.Errorf("ukuran dokumen maksimal 5MB (file ini %.2f MB)", float64(header.Size)/1024/1024)
 	}
 
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+	allowedExts := allowedBorrowDocExtensions(soCfg)
+	if len(allowedExts) == 0 {
+		return nil, errors.New("belum ada format file yang diizinkan buat dokumen peminjaman — atur dulu di halaman config stock opname")
+	}
+
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext != ".pdf" {
-		return nil, errors.New("dokumen peminjaman harus format PDF")
+	allowed := false
+	for _, e := range allowedExts {
+		if ext == e {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return nil, fmt.Errorf("format dokumen peminjaman harus salah satu dari: %s", strings.Join(allowedExts, ", "))
 	}
 
 	var item models.StockOpnameDraftItem
