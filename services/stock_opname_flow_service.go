@@ -4,7 +4,6 @@ import (
 	"backend-go/config"
 	"backend-go/dto"
 	"backend-go/models"
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rwcarlsen/goexif/exif"
 	"github.com/xuri/excelize/v2"
 	"gorm.io/gorm"
 )
@@ -1149,11 +1147,17 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 // FOTO BUKTI FISIK PER ASSET
 //
 // Wajib diisi sebelum submit (lihat SubmitStockOpname). Divalidasi 3
-// lapis: ukuran file, tanggal pengambilan foto (EXIF DateTimeOriginal,
-// maks 10 hari dari sekarang), dan foto gak boleh dipakai dobel buat
-// asset lain di stock opname yang sama (dicek lewat hash SHA-256 isi
-// file). Satu asset cuma boleh punya 1 foto aktif — upload ulang
-// menimpa foto sebelumnya.
+// lapis: ukuran file, tanggal modifikasi file (dikirim dari browser via
+// File.lastModified, maks 10 hari dari sekarang), dan foto gak boleh
+// dipakai dobel buat asset lain di stock opname yang sama (dicek lewat
+// hash SHA-256 isi file). Satu asset cuma boleh punya 1 foto aktif —
+// upload ulang menimpa foto sebelumnya.
+//
+// Sebelumnya divalidasi lewat EXIF DateTimeOriginal, tapi itu kelewat
+// strict — foto yang diteruskan lewat WhatsApp/aplikasi chat lain (atau
+// format selain JPEG) biasanya EXIF-nya udah hilang/kehapus padahal
+// fotonya masih valid & baru. Pakai tanggal "modified" file jauh lebih
+// longgar karena hampir semua file punya metadata ini.
 // ============================================================
 
 const (
@@ -1162,23 +1166,18 @@ const (
 	stockOpnamePhotoStorageDir = "uploads/stock_opname_photos"
 )
 
-// extractPhotoCapturedAt baca tanggal EXIF DateTimeOriginal dari isi file JPEG.
-// Foto hasil forward/kompres WhatsApp & sejenisnya biasanya EXIF-nya udah
-// kehapus otomatis — itu bakal ditolak di sini dengan pesan yang jelas,
-// bukan cuma "invalid file".
-func extractPhotoCapturedAt(data []byte) (time.Time, error) {
-	x, err := exif.Decode(bytes.NewReader(data))
-	if err != nil {
-		return time.Time{}, errors.New("foto tidak punya data EXIF (kemungkinan bukan foto asli dari kamera, atau EXIF-nya sudah hilang karena dikompres/forward lewat aplikasi chat) — upload foto asli dari kamera/galeri HP")
+// resolvePhotoModifiedAt nentuin tanggal "modified" foto dari nilai
+// File.lastModified (epoch milliseconds) yang dikirim frontend. Kalau
+// gak dikirim/gak valid, dianggap baru saja (tidak ditolak) — daripada
+// bikin upload gagal gara-gara metadata yang emang gak selalu ada.
+func resolvePhotoModifiedAt(clientModifiedAtMs int64) time.Time {
+	if clientModifiedAtMs <= 0 {
+		return time.Now()
 	}
-	capturedAt, err := x.DateTime()
-	if err != nil {
-		return time.Time{}, errors.New("data EXIF ada tapi tanggal pengambilan foto (DateTimeOriginal) tidak ditemukan di dalamnya")
-	}
-	return capturedAt, nil
+	return time.UnixMilli(clientModifiedAtMs)
 }
 
-func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetID uint, file multipart.File, header *multipart.FileHeader) (*dto.StockOpnameFlowDetailResponse, error) {
+func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetID uint, file multipart.File, header *multipart.FileHeader, clientModifiedAtMs int64) (*dto.StockOpnameFlowDetailResponse, error) {
 	transaction, err := getStockOpnameTransaction(transactionNumber)
 	if err != nil {
 		return nil, err
@@ -1196,8 +1195,8 @@ func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetI
 	}
 
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext != ".jpg" && ext != ".jpeg" {
-		return nil, errors.New("foto harus format JPEG (.jpg/.jpeg) supaya tanggal pengambilannya bisa divalidasi")
+	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" {
+		return nil, errors.New("foto harus format JPEG, PNG, atau WEBP")
 	}
 
 	var item models.TransactionStockOpname
@@ -1218,15 +1217,12 @@ func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetI
 		return nil, fmt.Errorf("ukuran foto maksimal 2MB (file ini %.2f MB)", float64(len(data))/1024/1024)
 	}
 
-	capturedAt, err := extractPhotoCapturedAt(data)
-	if err != nil {
-		return nil, err
-	}
+	capturedAt := resolvePhotoModifiedAt(clientModifiedAtMs)
 	if time.Since(capturedAt) > stockOpnamePhotoMaxAge {
-		return nil, fmt.Errorf("foto ini diambil tanggal %s, sudah lebih dari 10 hari dari sekarang — upload foto yang lebih baru", capturedAt.Format("02 Jan 2006"))
+		return nil, fmt.Errorf("foto ini terakhir dimodifikasi tanggal %s, sudah lebih dari 10 hari dari sekarang — upload foto yang lebih baru", capturedAt.Format("02 Jan 2006"))
 	}
 	if capturedAt.After(time.Now().Add(1 * time.Hour)) {
-		return nil, errors.New("tanggal pengambilan foto ada di masa depan — cek pengaturan tanggal/jam kamera atau HP kamu")
+		return nil, errors.New("tanggal modifikasi foto ada di masa depan — cek pengaturan tanggal/jam HP kamu")
 	}
 
 	hashBytes := sha256.Sum256(data)

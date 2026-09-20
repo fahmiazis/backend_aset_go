@@ -312,7 +312,11 @@ func UploadStockOpnameAssetPhoto(c *gin.Context) {
 	}
 	defer file.Close()
 
-	result, err := services.UploadStockOpnameAssetPhoto(userID, transactionNumber, uint(assetID), file, header)
+	// file_modified_at = File.lastModified (epoch ms) dari browser — opsional,
+	// dipakai buat validasi "gak lebih dari 10 hari" tanpa bergantung ke EXIF.
+	clientModifiedAtMs, _ := strconv.ParseInt(c.PostForm("file_modified_at"), 10, 64)
+
+	result, err := services.UploadStockOpnameAssetPhoto(userID, transactionNumber, uint(assetID), file, header, clientModifiedAtMs)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
