@@ -26,6 +26,9 @@ func GetAllApprovalFlows() ([]dto.ApprovalFlowResponse, error) {
 		}).
 		Preload("FlowSteps.Role").
 		Preload("FlowSteps.Branch").
+		// tanpa preload ini, assigned_username tidak pernah terisi di list
+		// dan UI cuma bisa menampilkan UUID-nya
+		Preload("AssignedUser").
 		Find(&flows).Error; err != nil {
 		return nil, err
 	}
@@ -124,8 +127,52 @@ func CreateApprovalFlow(req dto.CreateApprovalFlowRequest) (*dto.ApprovalFlowRes
 		allowedRolesJSON = &rolesStr
 	}
 
+	branchCode := req.BranchCode
+	if branchCode == "" {
+		branchCode = "ALL"
+	}
+
+	// Index unik uq_flow_code_branch (flow_code, branch_code) TIDAK menyertakan
+	// deleted_at, jadi baris yang sudah di-soft-delete tetap memblokir kode yang
+	// sama. Tanpa penanganan ini, hapus lalu tambah ulang selalu gagal dengan
+	// "Duplicate entry". Baris lamanya dipulihkan dan ditimpa nilai baru supaya
+	// foreign key dari transaction_approvals / approval_flow_steps tetap utuh.
+	var existing models.ApprovalFlow
+	err := config.DB.Unscoped().
+		Where("flow_code = ? AND branch_code = ?", req.FlowCode, branchCode).
+		First(&existing).Error
+
+	if err == nil {
+		if !existing.DeletedAt.Valid {
+			return nil, errors.New("approval flow with this code already exists for branch " + branchCode)
+		}
+
+		restore := map[string]interface{}{
+			"deleted_at":            nil,
+			"flow_name":             req.FlowName,
+			"approval_way":          req.ApprovalWay,
+			"assignment_type":       req.AssignmentType,
+			"assigned_user_id":      req.AssignedUserID,
+			"is_customizable":       req.IsCustomizable,
+			"allowed_creator_roles": allowedRolesJSON,
+			"description":           req.Description,
+			"is_active":             req.IsActive,
+		}
+
+		if err := config.DB.Unscoped().Model(&existing).Updates(restore).Error; err != nil {
+			return nil, err
+		}
+
+		return GetApprovalFlowByID(existing.ID)
+	}
+
+	if err != gorm.ErrRecordNotFound {
+		return nil, err
+	}
+
 	flow := models.ApprovalFlow{
 		FlowCode:            req.FlowCode,
+		BranchCode:          branchCode,
 		FlowName:            req.FlowName,
 		ApprovalWay:         req.ApprovalWay,
 		AssignmentType:      req.AssignmentType,
@@ -425,10 +472,18 @@ func InitiateTransactionApproval(req dto.CreateTransactionApprovalRequest) error
 		return errors.New("approval flow is inactive")
 	}
 
-	// Check if approval already exists for this transaction
+	// Cek duplikasi PER FLOW, bukan per transaksi.
+	//
+	// Disposal memakai dua flow berurutan pada transaksi yang sama
+	// (DISPOSAL_APPROVAL_REQUEST lalu DISPOSAL_APPROVAL_AGREEMENT). Kalau
+	// pengecekannya hanya transaction_number + transaction_type, tahap
+	// agreement SELALU ditolak "approval already initiated" karena baris dari
+	// tahap request masih ada. Untuk procurement/mutation yang cuma punya satu
+	// flow per transaksi, hasilnya sama persis seperti sebelumnya.
 	var existingCount int64
 	config.DB.Model(&models.TransactionApproval{}).
-		Where("transaction_number = ? AND transaction_type = ?", req.TransactionNumber, req.TransactionType).
+		Where("transaction_number = ? AND transaction_type = ? AND flow_id = ?",
+			req.TransactionNumber, req.TransactionType, req.FlowID).
 		Count(&existingCount)
 
 	if existingCount > 0 {
@@ -550,6 +605,17 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 		fmt.Printf("auto complete mutation approval warning: %v\n", err)
 	}
 
+	// Auto-trigger untuk disposal — dua tahap, masing-masing punya flow sendiri.
+	// Sebelumnya kedua fungsi ini tidak pernah dipanggil dari mana pun sehingga
+	// disposal mandek di APPROVAL_REQUEST walau semua step sudah approved.
+	if err := autoCompleteDisposalApprovalRequest(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
+		fmt.Printf("auto complete disposal approval request warning: %v\n", err)
+	}
+
+	if err := autoCompleteDisposalApprovalAgreement(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
+		fmt.Printf("auto complete disposal approval agreement warning: %v\n", err)
+	}
+
 	return nil
 }
 
@@ -631,16 +697,36 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 
 // GetTransactionApprovalStatus gets full approval status for a transaction
 func GetTransactionApprovalStatus(transactionNumber, transactionType string) (*dto.TransactionApprovalSummary, error) {
+	return GetTransactionApprovalStatusByFlowCode(transactionNumber, transactionType, "")
+}
+
+// GetTransactionApprovalStatusByFlowCode sama dengan GetTransactionApprovalStatus,
+// tapi bisa dibatasi ke satu flow.
+//
+// Disposal memakai dua flow pada transaction_number yang sama
+// (DISPOSAL_APPROVAL_REQUEST lalu DISPOSAL_APPROVAL_AGREEMENT). Tanpa filter
+// ini, panel status tahap kesepakatan ikut menghitung step tahap permohonan
+// sehingga total_steps dan completed_steps-nya salah.
+// flowCode kosong = tidak difilter (perilaku lama, dipakai procurement/mutation).
+func GetTransactionApprovalStatusByFlowCode(transactionNumber, transactionType, flowCode string) (*dto.TransactionApprovalSummary, error) {
 	var approvals []models.TransactionApproval
 
-	if err := config.DB.
+	query := config.DB.
 		Preload("ApprovalFlowStep").
 		Preload("ApproverUser").
 		Preload("ApproverRole").
 		Preload("ActualApprover").
 		Preload("ActualRejecter").
-		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
-		Find(&approvals).Error; err != nil {
+		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType)
+
+	if flowCode != "" {
+		flowIDs := config.DB.Model(&models.ApprovalFlow{}).
+			Select("id").
+			Where("flow_code = ?", flowCode)
+		query = query.Where("flow_id IN (?)", flowIDs)
+	}
+
+	if err := query.Find(&approvals).Error; err != nil {
 		return nil, err
 	}
 

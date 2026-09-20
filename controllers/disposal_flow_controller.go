@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"backend-go/dto"
+	"backend-go/models"
 	"backend-go/services"
 	"backend-go/utils"
 	"net/http"
@@ -211,7 +212,8 @@ func GetDisposalApprovalRequestStatus(c *gin.Context) {
 		return
 	}
 
-	result, err := services.GetTransactionApprovalStatus(transactionNumber, services.TxDisposalFlow)
+	result, err := services.GetTransactionApprovalStatusByFlowCode(
+		transactionNumber, services.TxDisposalFlow, models.FlowDisposalApprovalRequest)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
 		return
@@ -247,7 +249,8 @@ func GetDisposalApprovalAgreementStatus(c *gin.Context) {
 		return
 	}
 
-	result, err := services.GetTransactionApprovalStatus(transactionNumber, services.TxDisposalFlow)
+	result, err := services.GetTransactionApprovalStatusByFlowCode(
+		transactionNumber, services.TxDisposalFlow, models.FlowDisposalApprovalAgreement)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
 		return

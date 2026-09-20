@@ -296,6 +296,28 @@ func RemoveAssetFromDisposal(userID string, transactionNumber string, req dto.Re
 // DRAFT → PURCHASING (SELL) / APPROVAL_REQUEST (DISPOSE)
 // ============================================================
 
+// resolveDisposalApprovalFlow mencari flow approval milik cabang creator.
+// Dipakai sebagai pre-check SEBELUM stage dipindahkan, supaya transaksi tidak
+// terlanjur pindah stage lalu mentok karena flow-nya belum dikonfigurasi.
+func resolveDisposalApprovalFlow(transaction *models.Transaction, flowCode string) (*dto.ApprovalFlowResponse, error) {
+	branchCode := GetCreatorBranchCode(transaction.CreatedBy)
+
+	flow, err := GetApprovalFlowByCodeAndBranch(flowCode, branchCode)
+	if err != nil {
+		return nil, fmt.Errorf("approval flow %s not found for branch %s or ALL, please configure it first", flowCode, branchCode)
+	}
+
+	if !flow.IsActive {
+		return nil, fmt.Errorf("approval flow %s is inactive", flowCode)
+	}
+
+	if len(flow.FlowSteps) == 0 {
+		return nil, fmt.Errorf("approval flow %s has no steps configured", flowCode)
+	}
+
+	return flow, nil
+}
+
 func SubmitDisposal(userID string, transactionNumber string, req dto.SubmitDisposalRequest) (*dto.DisposalDetailResponse, error) {
 	transaction, err := getDisposalTransaction(transactionNumber)
 	if err != nil {
@@ -334,6 +356,17 @@ func SubmitDisposal(userID string, transactionNumber string, req dto.SubmitDispo
 		return nil, err
 	}
 
+	// DISPOSE lompat dari DRAFT langsung ke APPROVAL_REQUEST (SELL mampir ke
+	// PURCHASING dulu). Kalau tujuannya APPROVAL_REQUEST, flow-nya dipastikan
+	// siap DULU — kalau belum, submit dibatalkan dengan pesan jelas daripada
+	// transaksi pindah stage tapi tidak ada approval yang terbentuk.
+	initiateApproval := nextStage == models.StageDisposalApprovalRequest
+	if initiateApproval {
+		if _, err := resolveDisposalApprovalFlow(transaction, models.FlowDisposalApprovalRequest); err != nil {
+			return nil, err
+		}
+	}
+
 	tx := config.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -356,6 +389,15 @@ func SubmitDisposal(userID string, transactionNumber string, req dto.SubmitDispo
 
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
+	}
+
+	// Langsung bentuk baris approval — creator tidak perlu menekan tombol
+	// "ajukan" terpisah (dan tidak perlu permission manage_approval).
+	if initiateApproval {
+		if err := InitiateDisposalApprovalRequest(userID, transactionNumber,
+			dto.InitiateDisposalApprovalRequest{}); err != nil {
+			return nil, fmt.Errorf("disposal submitted but approval initiation failed: %w", err)
+		}
 	}
 
 	return GetDisposalDetail(transactionNumber)
@@ -400,6 +442,12 @@ func SetDisposalSaleValues(userID string, transactionNumber string, req dto.SetD
 		return nil, errors.New("not all required purchasing documents are uploaded for all assets")
 	}
 
+	// Sama seperti SubmitDisposal: jalur SELL masuk APPROVAL_REQUEST dari sini,
+	// jadi flow-nya dipastikan siap sebelum stage dipindahkan.
+	if _, err := resolveDisposalApprovalFlow(transaction, models.FlowDisposalApprovalRequest); err != nil {
+		return nil, err
+	}
+
 	tx := config.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -434,6 +482,11 @@ func SetDisposalSaleValues(userID string, transactionNumber string, req dto.SetD
 
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
+	}
+
+	if err := InitiateDisposalApprovalRequest(userID, transactionNumber,
+		dto.InitiateDisposalApprovalRequest{}); err != nil {
+		return nil, fmt.Errorf("sale values saved but approval initiation failed: %w", err)
 	}
 
 	return GetDisposalDetail(transactionNumber)
@@ -504,17 +557,49 @@ func InitiateDisposalApprovalRequest(userID string, transactionNumber string, re
 // → pindah ke APPROVAL_AGREEMENT
 // ============================================================
 
-func autoCompleteDisposalApprovalRequest(userID, transactionNumber string) error {
-	var total, approved int64
-	config.DB.Model(&models.TransactionApproval{}).
-		Where("transaction_number = ? AND transaction_type = ? AND approval_flow_code = ?",
-			transactionNumber, TxDisposalFlow, models.FlowDisposalApprovalRequest).
-		Count(&total)
+// countDisposalApprovalsByFlowCode menghitung baris approval milik satu flow.
+//
+// Kolom `approval_flow_code` TIDAK ADA di tabel transaction_approvals —
+// query lama memakainya sehingga MySQL error, Count tidak terisi, dan
+// auto-complete selalu keluar lebih awal tanpa melakukan apa pun. Pembedanya
+// yang benar adalah flow_id, karena kedua tahap disposal berbagi
+// transaction_number dan transaction_type yang sama.
+func countDisposalApprovalsByFlowCode(transactionNumber, flowCode string) (total int64, approved int64, err error) {
+	flowIDs := config.DB.Model(&models.ApprovalFlow{}).
+		Select("id").
+		Where("flow_code = ?", flowCode)
 
-	config.DB.Model(&models.TransactionApproval{}).
-		Where("transaction_number = ? AND transaction_type = ? AND approval_flow_code = ? AND status = ?",
-			transactionNumber, TxDisposalFlow, models.FlowDisposalApprovalRequest, "approved").
-		Count(&approved)
+	if err = config.DB.Model(&models.TransactionApproval{}).
+		Where("transaction_number = ? AND transaction_type = ? AND flow_id IN (?)",
+			transactionNumber, TxDisposalFlow, flowIDs).
+		Count(&total).Error; err != nil {
+		return 0, 0, err
+	}
+
+	flowIDsApproved := config.DB.Model(&models.ApprovalFlow{}).
+		Select("id").
+		Where("flow_code = ?", flowCode)
+
+	if err = config.DB.Model(&models.TransactionApproval{}).
+		Where("transaction_number = ? AND transaction_type = ? AND flow_id IN (?) AND status = ?",
+			transactionNumber, TxDisposalFlow, flowIDsApproved, "approved").
+		Count(&approved).Error; err != nil {
+		return 0, 0, err
+	}
+
+	return total, approved, nil
+}
+
+func autoCompleteDisposalApprovalRequest(userID, transactionNumber, transactionType string) error {
+	if transactionType != TxDisposalFlow {
+		return nil
+	}
+
+	total, approved, err := countDisposalApprovalsByFlowCode(
+		transactionNumber, models.FlowDisposalApprovalRequest)
+	if err != nil {
+		return err
+	}
 
 	if total == 0 || approved < total {
 		return nil
@@ -551,7 +636,15 @@ func autoCompleteDisposalApprovalRequest(userID, transactionNumber string) error
 		return err
 	}
 
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+
+	// Lanjut otomatis ke tahap kesepakatan. Kalau flow-nya belum dikonfigurasi,
+	// error dikembalikan sebagai warning oleh pemanggil — transaksi tetap ada di
+	// APPROVAL_AGREEMENT dan bisa diajukan manual dari UI.
+	return InitiateDisposalApprovalAgreement(userID, transactionNumber,
+		dto.InitiateDisposalApprovalRequest{})
 }
 
 // ============================================================
@@ -617,17 +710,16 @@ func InitiateDisposalApprovalAgreement(userID string, transactionNumber string, 
 // → pindah ke EXECUTE
 // ============================================================
 
-func autoCompleteDisposalApprovalAgreement(userID, transactionNumber string) error {
-	var total, approved int64
-	config.DB.Model(&models.TransactionApproval{}).
-		Where("transaction_number = ? AND transaction_type = ? AND approval_flow_code = ?",
-			transactionNumber, TxDisposalFlow, models.FlowDisposalApprovalAgreement).
-		Count(&total)
+func autoCompleteDisposalApprovalAgreement(userID, transactionNumber, transactionType string) error {
+	if transactionType != TxDisposalFlow {
+		return nil
+	}
 
-	config.DB.Model(&models.TransactionApproval{}).
-		Where("transaction_number = ? AND transaction_type = ? AND approval_flow_code = ? AND status = ?",
-			transactionNumber, TxDisposalFlow, models.FlowDisposalApprovalAgreement, "approved").
-		Count(&approved)
+	total, approved, err := countDisposalApprovalsByFlowCode(
+		transactionNumber, models.FlowDisposalApprovalAgreement)
+	if err != nil {
+		return err
+	}
 
 	if total == 0 || approved < total {
 		return nil
@@ -1100,6 +1192,7 @@ func GetDisposalDetail(transactionNumber string) (*dto.DisposalDetailResponse, e
 			ApprovalAgreementNumber: transaction.ApprovalAgreementNumber,
 			Notes:                   transaction.Notes,
 			CreatedBy:               transaction.CreatedBy,
+			CreatedByName:           resolveUserFullname(transaction.CreatedBy),
 			CreatedAt:               transaction.CreatedAt,
 			UpdatedAt:               transaction.UpdatedAt,
 		},
