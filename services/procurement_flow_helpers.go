@@ -123,14 +123,15 @@ func recordStage(tx *gorm.DB, transactionID uint, transactionNumber, fromStage, 
 
 // stageToStatus mapping stage ke status transaksi
 var stageToStatus = map[string]string{
-	models.StageDraft:             models.TransactionStatusDraft,
-	models.StageAssetVerification: "PENDING",
-	models.StageApproval:          "PENDING",
-	models.StageProcessBudget:     "PROCESSING",
-	models.StageExecuteAsset:      "PROCESSING",
-	models.StageGR:                "PROCESSING",
-	models.StageFinished:          models.TransactionStatusApproved,
-	models.StageRejected:          models.TransactionStatusRejected,
+	models.StageDraft:              models.TransactionStatusDraft,
+	models.StageAssetVerification:  "PENDING",
+	models.StageApproval:           "PENDING",
+	models.StageProcessBudget:      "PROCESSING",
+	models.StageExecuteAsset:       "PROCESSING",
+	models.StageGR:                 "PROCESSING",
+	models.StageFinished:           models.TransactionStatusApproved,
+	models.StageRejected:           models.TransactionStatusRejected,
+	models.StageStockOpnameExecute: models.TransactionStatusProcessing,
 }
 
 // updateTransactionStage update current_stage & status di tabel transactions

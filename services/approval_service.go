@@ -550,6 +550,11 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 		fmt.Printf("auto complete mutation approval warning: %v\n", err)
 	}
 
+	// Auto-trigger untuk stock opname
+	if err := autoCompleteStockOpnameApproval(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
+		fmt.Printf("auto complete stock opname approval warning: %v\n", err)
+	}
+
 	return nil
 }
 
