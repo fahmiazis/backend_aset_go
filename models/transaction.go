@@ -10,6 +10,7 @@ type Transaction struct {
 	TransactionDate      time.Time  `gorm:"type:date;not null;index" json:"transaction_date"`
 	Status               string     `gorm:"size:50;not null;default:DRAFT;index" json:"status"`
 	CurrentStage         string     `gorm:"size:50;not null;default:DRAFT;index" json:"current_stage"` // ADD
+	IsSubmissive         *bool      `json:"is_submissive"`                                             // ADD: stock opname doang, diisi pas submit
 	IONumber             *string    `gorm:"size:50" json:"io_number"`                                  // ADD
 	MutationCategoryID   *uint      `gorm:"index" json:"mutation_category_id"`
 	MutationToBranchCode *string    `gorm:"size:50;index" json:"mutation_to_branch_code"`

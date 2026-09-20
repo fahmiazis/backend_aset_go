@@ -430,6 +430,20 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, fmt.Errorf("failed to clear moved draft items: %w", err)
 	}
 
+	// IsSubmissive cuma penanda kepatuhan jadwal (dinilai dari tanggal
+	// SUBMIT, bukan tanggal draft dibuat) — gak pernah menghalangi submit
+	// itu sendiri, submit di luar jendela tetap jalan seperti biasa.
+	submissionCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	isSubmissive := isWithinSubmissionWindow(time.Now(), submissionCfg.SubmissionStartDay, submissionCfg.SubmissionEndDay)
+	if err := tx.Model(transaction).Update("is_submissive", isSubmissive).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
 	fromStage := transaction.CurrentStage
 	if err := updateTransactionStage(tx, transaction, models.StageApproval); err != nil {
 		tx.Rollback()
@@ -852,9 +866,10 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 	}
 
 	return &dto.StockOpnameFlowDetailResponse{
-		Transaction: mapTransactionHeaderToResponse(*transaction),
-		Items:       itemResponses,
-		Stages:      mapTransactionStagesToResponse(stages),
+		Transaction:  mapTransactionHeaderToResponse(*transaction),
+		Items:        itemResponses,
+		Stages:       mapTransactionStagesToResponse(stages),
+		IsSubmissive: transaction.IsSubmissive,
 	}, nil
 }
 

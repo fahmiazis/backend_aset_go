@@ -133,6 +133,12 @@ type StockOpnameFlowDetailResponse struct {
 	Transaction TransactionHeaderResponse     `json:"transaction"`
 	Items       []StockOpnameFlowItemResponse `json:"items"`
 	Stages      []TransactionStageResponse    `json:"stages"`
+
+	// IsSubmissive: null kalau belum pernah di-submit, kalau udah diisi
+	// TRUE/FALSE tergantung submit-nya masuk jendela StockOpnameConfig atau
+	// enggak (lihat SubmitStockOpname). Cuma penanda kepatuhan jadwal —
+	// tidak pernah memblokir submit.
+	IsSubmissive *bool `json:"is_submissive"`
 }
 
 // ============================================================

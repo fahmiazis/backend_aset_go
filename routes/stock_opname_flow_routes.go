@@ -28,6 +28,11 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 		// GET /transactions/stock-opname/borrow-document/:id/file → serve dokumen peminjaman (inline), gak dibatasi stage
 		stockOpname.GET("/borrow-document/:id/file", controllers.ServeStockOpnameBorrowDocument)
 
+		// GET/PUT /transactions/stock-opname/config → lihat/ubah jendela tanggal submit
+		// Belum ada pembatasan role/permission (nyusul) — cukup login.
+		stockOpname.GET("/config", controllers.GetStockOpnameConfig)
+		stockOpname.PUT("/config", controllers.UpdateStockOpnameConfig)
+
 		stockOpnameDraft := stockOpname.Group("/draft")
 		{
 			// PUT /transactions/stock-opname/draft/update-finding?transaction_number → isi/update temuan fisik per asset

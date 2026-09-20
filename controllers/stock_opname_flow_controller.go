@@ -373,6 +373,33 @@ func UploadStockOpnameBorrowDocument(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Borrow document uploaded successfully", result)
 }
 
+func GetStockOpnameConfig(c *gin.Context) {
+	result, err := services.GetStockOpnameConfig()
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname config retrieved successfully", result)
+}
+
+func UpdateStockOpnameConfig(c *gin.Context) {
+	userID := c.GetString("user_id")
+
+	var req dto.UpdateStockOpnameConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.UpdateStockOpnameConfig(userID, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname config updated successfully", result)
+}
+
 func ServeStockOpnameBorrowDocument(c *gin.Context) {
 	docID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
