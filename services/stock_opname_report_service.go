@@ -179,17 +179,29 @@ func gatherStockOpnameFacts(month, year int, branchCode string) ([]assetOpnameFa
 		CurrentStage      string
 		CreatedAt         time.Time
 	}
+	// Item stock opname sekarang tersebar di 3 tabel tergantung stage
+	// (draft/aktif/history — lihat services/stock_opname_flow_service.go),
+	// jadi digabung lewat UNION ALL biar laporan tetap lihat semua item di
+	// periode ini gak peduli lagi ada di tabel mana.
+	itemTables := []string{"stock_opname_draft_items", "transaction_stock_opnames", "stock_opname_item_history"}
+	unionParts := make([]string, len(itemTables))
+	args := make([]interface{}, 0, len(itemTables)*3)
+	for i, table := range itemTables {
+		unionParts[i] = fmt.Sprintf(`
+			SELECT tso.asset_id AS asset_id, tso.physical_status AS physical_status,
+			       tso.`+"`condition`"+` AS `+"`condition`"+`, tso.asset_status AS asset_status,
+			       tso.transaction_id AS transaction_id, tso.transaction_number AS transaction_number,
+			       t.current_stage AS current_stage, t.created_at AS created_at
+			FROM %s tso
+			JOIN transactions t ON t.id = tso.transaction_id
+			WHERE t.transaction_type = ? AND t.transaction_date BETWEEN ? AND ?
+		`, table)
+		args = append(args, TxStockOpnameFlow, start.Format("2006-01-02"), end.Format("2006-01-02"))
+	}
+	unionQuery := strings.Join(unionParts, " UNION ALL ") + " ORDER BY created_at ASC"
+
 	var items []itemRow
-	if err := config.DB.Table("transaction_stock_opnames AS tso").
-		Select("tso.asset_id AS asset_id, tso.physical_status AS physical_status, "+
-			"tso.`condition` AS `condition`, tso.asset_status AS asset_status, "+
-			"tso.transaction_id AS transaction_id, tso.transaction_number AS transaction_number, "+
-			"t.current_stage AS current_stage, t.created_at AS created_at").
-		Joins("JOIN transactions t ON t.id = tso.transaction_id").
-		Where("t.transaction_type = ? AND t.transaction_date BETWEEN ? AND ?",
-			TxStockOpnameFlow, start.Format("2006-01-02"), end.Format("2006-01-02")).
-		Order("t.created_at ASC").
-		Scan(&items).Error; err != nil {
+	if err := config.DB.Raw(unionQuery, args...).Scan(&items).Error; err != nil {
 		return nil, start, end, fmt.Errorf("failed to load stock opname items: %w", err)
 	}
 
