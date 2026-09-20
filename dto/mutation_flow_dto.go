@@ -125,6 +125,7 @@ type MutationTransactionResponse struct {
 	ToBranchCode      *string   `json:"to_branch_code"`
 	Notes             *string   `json:"notes"`
 	CreatedBy         string    `json:"created_by"`
+	CreatedByName     *string   `json:"created_by_name"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }

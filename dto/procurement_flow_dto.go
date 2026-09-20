@@ -182,6 +182,7 @@ type ProcurementTransactionResponse struct {
 	IONumber          *string    `json:"io_number"`
 	Notes             *string    `json:"notes"`
 	CreatedBy         string     `json:"created_by"`
+	CreatedByName     *string    `json:"created_by_name"`
 	ApprovedBy        *string    `json:"approved_by"`
 	ApprovedAt        *time.Time `json:"approved_at"`
 	CreatedAt         time.Time  `json:"created_at"`

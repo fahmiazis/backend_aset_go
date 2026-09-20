@@ -637,6 +637,7 @@ func GetMutationDetail(transactionNumber string) (*dto.MutationDetailResponse, e
 			ToBranchCode:      transaction.MutationToBranchCode,
 			Notes:             transaction.Notes,
 			CreatedBy:         transaction.CreatedBy,
+			CreatedByName:     resolveUserFullname(transaction.CreatedBy),
 			CreatedAt:         transaction.CreatedAt,
 			UpdatedAt:         transaction.UpdatedAt,
 		},

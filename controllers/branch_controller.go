@@ -138,3 +138,116 @@ func RemoveBranchFromUser(c *gin.Context) {
 
 	utils.SuccessResponse(c, http.StatusOK, "Branch removed from user successfully", nil)
 }
+
+// ============================================================================
+// HOMEBASE MEMBERS — pengelolaan anggota homebase dari sisi cabang
+// ============================================================================
+
+// GetBranchHomebaseUsers - GET /branchs/:id/homebase-users
+// Daftar user yang homebase-nya cabang ini.
+func GetBranchHomebaseUsers(c *gin.Context) {
+	branchID := c.Param("id")
+
+	users, err := services.GetBranchHomebaseUsers(branchID)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Homebase users retrieved successfully", users)
+}
+
+// AssignHomebaseUsers - POST /branchs/:id/homebase-users
+// Set banyak user sekaligus agar homebase aktifnya menjadi cabang ini.
+func AssignHomebaseUsers(c *gin.Context) {
+	branchID := c.Param("id")
+
+	var req dto.AssignHomebaseUsersRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	if err := services.AssignHomebaseUsers(branchID, req.UserIDs); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	users, err := services.GetBranchHomebaseUsers(branchID)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Homebase users assigned successfully", users)
+}
+
+// RemoveHomebaseUser - DELETE /branchs/:id/homebase-users/:user_id
+// Lepas satu user dari homebase cabang ini.
+func RemoveHomebaseUser(c *gin.Context) {
+	branchID := c.Param("id")
+	userID := c.Param("user_id")
+
+	if err := services.RemoveHomebaseUser(branchID, userID); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Homebase user removed successfully", nil)
+}
+
+// ============================================================================
+// BRANCH ASSIGNMENT — akses cabang tambahan (bukan homebase)
+// ============================================================================
+
+// GetBranchAssignedUsers - GET /branchs/:id/assigned-users
+func GetBranchAssignedUsers(c *gin.Context) {
+	branchID := c.Param("id")
+
+	users, err := services.GetBranchAssignedUsers(branchID)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Assigned users retrieved successfully", users)
+}
+
+// AssignBranchUsers - POST /branchs/:id/assigned-users
+// Beri banyak user sekaligus akses ke cabang ini. Satu user boleh punya
+// akses ke banyak cabang.
+func AssignBranchUsers(c *gin.Context) {
+	branchID := c.Param("id")
+
+	var req dto.AssignBranchUsersRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	if err := services.AssignBranchUsers(branchID, req.UserIDs); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	users, err := services.GetBranchAssignedUsers(branchID)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Users assigned to branch successfully", users)
+}
+
+// RemoveBranchUser - DELETE /branchs/:id/assigned-users/:user_id
+func RemoveBranchUser(c *gin.Context) {
+	branchID := c.Param("id")
+	userID := c.Param("user_id")
+
+	if err := services.RemoveBranchUser(branchID, userID); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "User removed from branch successfully", nil)
+}

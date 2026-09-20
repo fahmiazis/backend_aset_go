@@ -11,6 +11,7 @@ type Menu struct {
 	ID         string         `gorm:"type:char(36);primaryKey" json:"id"`
 	ParentID   *string        `gorm:"type:char(36)" json:"parent_id"`
 	Name       string         `gorm:"type:varchar(100);not null" json:"name"`
+	MenuType   string         `gorm:"type:enum('page','group','permission');not null;default:page;index" json:"menu_type"`
 	Path       *string        `gorm:"type:varchar(255)" json:"path"`       // frontend route
 	RoutePath  *string        `gorm:"type:varchar(255)" json:"route_path"` // backend API route
 	IconName   *string        `gorm:"type:varchar(100)" json:"icon_name"`
@@ -24,6 +25,26 @@ type Menu struct {
 	Parent    *Menu      `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
 	Children  []Menu     `gorm:"foreignKey:ParentID" json:"children,omitempty"`
 	RoleMenus []RoleMenu `gorm:"foreignKey:MenuID" json:"role_menus,omitempty"`
+}
+
+// Jenis menu.
+//   MenuTypePage       — menu biasa, punya halaman, tampil di sidebar
+//   MenuTypeGroup      — wadah di sidebar, tanpa halaman
+//   MenuTypePermission — tidak tampil di sidebar; hanya pemetaan route_path → permission
+//                        untuk middleware.RequirePermission (mis. endpoint tanpa halaman)
+const (
+	MenuTypePage       = "page"
+	MenuTypeGroup      = "group"
+	MenuTypePermission = "permission"
+)
+
+// IsValidMenuType cek apakah jenis menu dikenal.
+func IsValidMenuType(t string) bool {
+	switch t {
+	case MenuTypePage, MenuTypeGroup, MenuTypePermission:
+		return true
+	}
+	return false
 }
 
 func (m *Menu) BeforeCreate(tx *gorm.DB) error {

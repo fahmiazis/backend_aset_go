@@ -138,3 +138,82 @@ func GetSidebarMenus(c *gin.Context) {
 	fmt.Printf("Menus retrieved: %d items\n", len(menus))
 	utils.SuccessResponse(c, http.StatusOK, "Sidebar menus retrieved successfully", menus)
 }
+
+// ReorderMenus - PUT /menus/reorder
+// Ubah order_index (dan opsional parent_id) banyak menu sekaligus.
+func ReorderMenus(c *gin.Context) {
+	var req dto.ReorderMenusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := services.ReorderMenus(req); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	menus, err := services.GetAllMenus()
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Menus reordered successfully", menus)
+}
+
+// GetPermissionCatalog - GET /menus/permissions
+// Seluruh hak akses + pemetaannya ke tiap menu (tabel menu_permissions).
+func GetPermissionCatalog(c *gin.Context) {
+	catalog, err := services.GetPermissionCatalog()
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Permission catalog retrieved successfully", catalog)
+}
+
+// AddPermission - POST /menus/permissions
+// Tambah hak akses baru ke master (mode development), opsional langsung
+// dipetakan ke sebuah menu.
+func AddPermission(c *gin.Context) {
+	var req dto.AddPermissionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	permission, err := services.AddPermission(req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusCreated, "Permission added successfully", permission)
+}
+
+// SetMenuPermissions - PUT /menus/:id/permissions
+// Tentukan hak akses mana saja yang relevan untuk sebuah menu.
+func SetMenuPermissions(c *gin.Context) {
+	menuID := c.Param("id")
+
+	var req dto.MapPermissionsToMenuRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := services.SetMenuPermissions(menuID, req.Permissions); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	catalog, err := services.GetPermissionCatalog()
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Menu permissions updated successfully", catalog)
+}

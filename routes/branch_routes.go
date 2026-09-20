@@ -17,6 +17,12 @@ func SetupBranchRoutes(rg *gin.RouterGroup) {
 		branchs.GET("/:id", controllers.GetBranchByID)
 		branchs.GET("/:id/users", controllers.GetBranchUsers)
 
+		// Anggota homebase cabang ini
+		branchs.GET("/:id/homebase-users", controllers.GetBranchHomebaseUsers)
+
+		// User yang di-assign ke cabang ini (akses tambahan, bukan homebase)
+		branchs.GET("/:id/assigned-users", controllers.GetBranchAssignedUsers)
+
 		// Admin only routes
 		adminRoutes := branchs.Group("")
 		adminRoutes.Use(middleware.RequireRole("admin"))
@@ -24,6 +30,14 @@ func SetupBranchRoutes(rg *gin.RouterGroup) {
 			adminRoutes.POST("", controllers.CreateBranch)
 			adminRoutes.PUT("/:id", controllers.UpdateBranch)
 			adminRoutes.DELETE("/:id", controllers.DeleteBranch)
+
+			// Set banyak user sekaligus jadi homebase di cabang ini
+			adminRoutes.POST("/:id/homebase-users", controllers.AssignHomebaseUsers)
+			adminRoutes.DELETE("/:id/homebase-users/:user_id", controllers.RemoveHomebaseUser)
+
+			// Beri banyak user sekaligus akses ke cabang ini
+			adminRoutes.POST("/:id/assigned-users", controllers.AssignBranchUsers)
+			adminRoutes.DELETE("/:id/assigned-users/:user_id", controllers.RemoveBranchUser)
 		}
 	}
 

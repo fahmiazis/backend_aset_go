@@ -133,6 +133,7 @@ type DisposalTransactionResponse struct {
 	ApprovalAgreementNumber *string   `json:"approval_agreement_number"`
 	Notes                   *string   `json:"notes"`
 	CreatedBy               string    `json:"created_by"`
+	CreatedByName           *string   `json:"created_by_name"`
 	CreatedAt               time.Time `json:"created_at"`
 	UpdatedAt               time.Time `json:"updated_at"`
 }

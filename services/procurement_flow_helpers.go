@@ -409,6 +409,7 @@ func GetProcurementDetailWithStage(transactionNumber string) (*dto.ProcurementDe
 			IONumber:          transaction.IONumber,
 			Notes:             transaction.Notes,
 			CreatedBy:         transaction.CreatedBy,
+			CreatedByName:     resolveUserFullname(transaction.CreatedBy),
 			ApprovedBy:        transaction.ApprovedBy,
 			ApprovedAt:        transaction.ApprovedAt,
 			CreatedAt:         transaction.CreatedAt,

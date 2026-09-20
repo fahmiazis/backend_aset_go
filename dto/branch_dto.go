@@ -49,3 +49,40 @@ type UserBranchResponse struct {
 	Email    string           `json:"email"`
 	Branchs  []BranchResponse `json:"branchs"`
 }
+
+// ============================================================================
+// HOMEBASE — pengelolaan anggota homebase dari sisi cabang
+// ============================================================================
+
+// AssignHomebaseUsersRequest — set banyak user sekaligus agar homebase-nya
+// menjadi cabang ini.
+type AssignHomebaseUsersRequest struct {
+	UserIDs []string `json:"user_ids" binding:"required,min=1"`
+}
+
+// HomebaseUserResponse — satu user yang homebase-nya di cabang ini
+type HomebaseUserResponse struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Fullname string `json:"fullname"`
+	Email    string `json:"email"`
+	Status   string `json:"status"`
+	// IsActive menandai apakah cabang ini homebase yang sedang aktif bagi user
+	// tersebut. User bisa punya beberapa homebase, tapi hanya satu yang aktif.
+	IsActive bool `json:"is_active"`
+}
+
+// AssignBranchUsersRequest — beri banyak user sekaligus akses ke cabang ini
+type AssignBranchUsersRequest struct {
+	UserIDs []string `json:"user_ids" binding:"required,min=1"`
+}
+
+// BranchAssignedUserResponse — user yang di-assign ke cabang ini (non-homebase)
+type BranchAssignedUserResponse struct {
+	ID         string `json:"id"`
+	Username   string `json:"username"`
+	Fullname   string `json:"fullname"`
+	Email      string `json:"email"`
+	Status     string `json:"status"`
+	BranchType string `json:"branch_type"`
+}

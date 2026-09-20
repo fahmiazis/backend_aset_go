@@ -14,15 +14,28 @@ func SetupMenuRoutes(rg *gin.RouterGroup) {
 		// Sidebar - accessible by all authenticated users
 		menus.GET("/sidebar", controllers.GetSidebarMenus)
 
+		// Katalog permission — dipakai picker hak akses role
+		menus.GET("/permissions", controllers.GetPermissionCatalog)
+
 		// Admin only routes
 		adminRoutes := menus.Group("")
 		adminRoutes.Use(middleware.RequireRole("admin"))
 		{
 			adminRoutes.GET("", controllers.GetAllMenus)
 			adminRoutes.POST("", controllers.CreateMenu)
+
+			// Didaftarkan sebelum /:id supaya "reorder" tidak tertangkap sebagai ID
+			adminRoutes.PUT("/reorder", controllers.ReorderMenus)
+
+			// Tambah hak akses baru ke master (mode development)
+			adminRoutes.POST("/permissions", controllers.AddPermission)
+
 			adminRoutes.GET("/:id", controllers.GetMenuByID)
 			adminRoutes.PUT("/:id", controllers.UpdateMenu)
 			adminRoutes.DELETE("/:id", controllers.DeleteMenu)
+
+			// Atur hak akses mana yang relevan untuk sebuah menu
+			adminRoutes.PUT("/:id/permissions", controllers.SetMenuPermissions)
 		}
 	}
 

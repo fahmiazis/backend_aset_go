@@ -20,6 +20,7 @@ func mapTransactionHeaderToResponse(tx models.Transaction) dto.TransactionHeader
 		CurrentStage:      tx.CurrentStage, // ADD
 		Notes:             tx.Notes,
 		CreatedBy:         tx.CreatedBy,
+		CreatedByName:     resolveUserFullname(tx.CreatedBy),
 		ApprovedBy:        tx.ApprovedBy,
 		ApprovedAt:        tx.ApprovedAt,
 		CreatedAt:         tx.CreatedAt,
@@ -28,9 +29,33 @@ func mapTransactionHeaderToResponse(tx models.Transaction) dto.TransactionHeader
 }
 
 func mapTransactionHeadersToResponse(transactions []models.Transaction) []dto.TransactionHeaderResponse {
+	// Batch lookup fullname supaya tidak N+1 query
+	creatorIDs := make([]string, 0, len(transactions))
+	for _, tx := range transactions {
+		creatorIDs = append(creatorIDs, tx.CreatedBy)
+	}
+	names := resolveUserFullnames(creatorIDs)
+
 	response := make([]dto.TransactionHeaderResponse, len(transactions))
 	for i, tx := range transactions {
-		response[i] = mapTransactionHeaderToResponse(tx)
+		response[i] = dto.TransactionHeaderResponse{
+			ID:                tx.ID,
+			TransactionNumber: tx.TransactionNumber,
+			TransactionType:   tx.TransactionType,
+			TransactionDate:   tx.TransactionDate,
+			Status:            tx.Status,
+			CurrentStage:      tx.CurrentStage,
+			Notes:             tx.Notes,
+			CreatedBy:         tx.CreatedBy,
+			ApprovedBy:        tx.ApprovedBy,
+			ApprovedAt:        tx.ApprovedAt,
+			CreatedAt:         tx.CreatedAt,
+			UpdatedAt:         tx.UpdatedAt,
+		}
+		if name, ok := names[tx.CreatedBy]; ok {
+			n := name
+			response[i].CreatedByName = &n
+		}
 	}
 	return response
 }
