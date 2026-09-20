@@ -764,6 +764,7 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 	config.DB.
 		Preload("Asset.Category").
 		Where("transaction_id = ?", transaction.ID).
+		Order("asset_number ASC").
 		Find(&items)
 
 	var stages []models.TransactionStage
