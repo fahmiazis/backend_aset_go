@@ -131,6 +131,7 @@ var stageToStatus = map[string]string{
 	models.StageGR:                "PROCESSING",
 	models.StageFinished:          models.TransactionStatusApproved,
 	models.StageRejected:          models.TransactionStatusRejected,
+	models.StageDisposalCancelled: models.TransactionStatusCancelled,
 }
 
 // updateTransactionStage update current_stage & status di tabel transactions

@@ -143,6 +143,27 @@ func SetupDisposalFlowRoutes(rg *gin.RouterGroup) {
 			controllers.RejectDisposal)
 
 		// ============================================================
+		// REVISI — kembalikan ke DRAFT
+		// POST /transactions/disposal/revise?transaction_number=xxx
+		//
+		// Sengaja tanpa RequirePermission: otorisasinya dicek di service,
+		// yaitu harus approver dari step yang sedang berjalan — sama seperti
+		// /transaction-approvals/approve dan /reject.
+		// ============================================================
+
+		disposal.POST("/revise", controllers.ReviseDisposal)
+
+		// ============================================================
+		// CANCEL — pembatalan oleh pengaju
+		// POST /transactions/disposal/cancel?transaction_number=xxx
+		//
+		// Tanpa RequirePermission: yang boleh hanya pembuat transaksinya
+		// sendiri, dicek di service. Beda dengan /reject yang untuk approver.
+		// ============================================================
+
+		disposal.POST("/cancel", controllers.CancelDisposal)
+
+		// ============================================================
 		// ATTACHMENT PER ASSET PER STAGE
 		// POST /transactions/disposal/attachments/upload?transaction_number
 		// PUT  /transactions/disposal/attachments/:id/review
@@ -159,5 +180,10 @@ func SetupDisposalFlowRoutes(rg *gin.RouterGroup) {
 
 		disposal.GET("/attachments/status",
 			controllers.GetDisposalAttachmentStatus)
+
+		// GET /transactions/disposal/attachments/:id/file[?download=1]
+		// Stream file untuk preview & download. Tidak dilayani sebagai static
+		// folder karena isinya perlu autentikasi.
+		disposal.GET("/attachments/:id/file", controllers.GetDisposalAttachmentFile)
 	}
 }

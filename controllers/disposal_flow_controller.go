@@ -364,6 +364,88 @@ func RejectDisposal(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Disposal rejected", result)
 }
 
+// ReviseDisposal - POST /transactions/disposal/revise?transaction_number=xxx
+// Approver step berjalan mengembalikan transaksi ke DRAFT
+func ReviseDisposal(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.ReviseDisposalRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.ReviseDisposal(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Disposal returned to draft for revision", result)
+}
+
+// CancelDisposal - POST /transactions/disposal/cancel?transaction_number=xxx
+// Pembatalan oleh pengaju transaksi (bukan reject oleh approver)
+func CancelDisposal(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.CancelDisposalRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.CancelDisposal(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Disposal cancelled", result)
+}
+
+// GetDisposalAttachmentFile - GET /transactions/disposal/attachments/:id/file
+// Stream file attachment (preview & download). Tetap lewat auth, jadi dokumen
+// tidak bisa diambil hanya dengan menebak URL.
+func GetDisposalAttachmentFile(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "invalid attachment id")
+		return
+	}
+
+	att, absolutePath, err := services.GetDisposalAttachmentFile(uint(id))
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	contentType := "application/octet-stream"
+	if att.MimeType != nil && *att.MimeType != "" {
+		contentType = *att.MimeType
+	}
+
+	// inline supaya bisa dipreview; frontend tetap bisa memaksa download
+	disposition := "inline"
+	if c.Query("download") == "1" {
+		disposition = "attachment"
+	}
+
+	c.Header("Content-Disposition", disposition+"; filename=\""+att.FileName+"\"")
+	c.Header("Content-Type", contentType)
+	c.File(absolutePath)
+}
+
 // ============================================================
 // ATTACHMENT
 // ============================================================

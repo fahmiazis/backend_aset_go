@@ -17,6 +17,8 @@ const (
 	StageDisposalAssetDeletion     = "ASSET_DELETION"
 	StageDisposalFinished          = "FINISHED"
 	StageDisposalRejected          = "REJECTED"
+	// CANCELLED — dibatalkan oleh pengaju sendiri, bukan ditolak approver
+	StageDisposalCancelled = "CANCELLED"
 )
 
 // ============================================================
@@ -44,6 +46,10 @@ const (
 
 const AssetStatusInDisposal = "IN_DISPOSAL"
 
+// ActionCancel — pembatalan oleh pengaju. Dipisah dari ActionReject supaya
+// riwayat stage bisa membedakan "dibatalkan sendiri" dan "ditolak approver".
+const ActionCancel = "CANCEL"
+
 // ============================================================
 // Constants — Approval Flow Code
 // ============================================================
@@ -70,6 +76,10 @@ type TransactionDisposalAsset struct {
 	DocumentNumber    *string   `gorm:"size:50" json:"document_number"`       // generated saat asset deletion
 	Notes             *string   `gorm:"type:text" json:"notes"`
 	Status            string    `gorm:"type:enum('PENDING','DELETED','CANCELLED');not null;default:PENDING;index" json:"status"`
+	// Ditandai approver saat meminta revisi. Selama masih true, hanya aset
+	// inilah yang boleh diubah pengaju; dibersihkan saat submit ulang.
+	NeedsRevision bool    `gorm:"not null;default:false;index" json:"needs_revision"`
+	RevisionNotes *string `gorm:"type:text" json:"revision_notes"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 

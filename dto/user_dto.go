@@ -10,7 +10,9 @@ type CreateUserRequest struct {
 	NIK       string   `json:"nik"`
 	MPNNumber string   `json:"mpn_number"`
 	Status    string   `json:"status" binding:"omitempty,oneof=active inactive"`
-	RoleIDs   []string `json:"role_ids" binding:"required,min=1"`
+	// Satu user hanya boleh punya satu role — dikirim sebagai array demi
+	// kompatibilitas dengan klien lama, tapi isinya dibatasi satu.
+	RoleIDs []string `json:"role_ids" binding:"required,min=1,max=1"`
 }
 
 type UpdateUserRequest struct {
@@ -42,5 +44,6 @@ type RoleResponse struct {
 }
 
 type AssignRoleRequest struct {
-	RoleIDs []string `json:"role_ids" binding:"required,min=1"`
+	// Satu user hanya boleh punya satu role. Lihat CreateUserRequest.
+	RoleIDs []string `json:"role_ids" binding:"required,min=1,max=1"`
 }

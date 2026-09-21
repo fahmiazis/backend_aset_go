@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -147,6 +148,12 @@ func AddAssetToDisposal(userID string, transactionNumber string, req dto.AddDisp
 		return nil, errors.New("you can only modify your own disposal draft")
 	}
 
+	// Saat transaksi sedang dalam revisi, lingkupnya sudah ditentukan approver —
+	// menambah aset baru akan keluar dari lingkup itu.
+	if disposalHasPendingRevision(transaction.ID) {
+		return nil, errors.New("transaction is under revision, you can only fix the assets marked by the approver")
+	}
+
 	// Validasi asset exist dan statusnya ACTIVE
 	var asset models.Asset
 	if err := config.DB.Preload("Category").First(&asset, req.AssetID).Error; err != nil {
@@ -257,6 +264,11 @@ func RemoveAssetFromDisposal(userID string, transactionNumber string, req dto.Re
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("asset not found in this disposal")
 		}
+		return nil, err
+	}
+
+	// Selama revisi, aset yang tidak ditandai approver tidak boleh diutak-atik
+	if err := assertAssetRevisable(transaction.ID, disposalAsset.ID); err != nil {
 		return nil, err
 	}
 
@@ -383,6 +395,17 @@ func SubmitDisposal(userID string, transactionNumber string, req dto.SubmitDispo
 	if err := recordStage(tx, transaction.ID, transactionNumber,
 		fromStage, nextStage,
 		models.ActionSubmit, userID, nil, req.Notes); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Revisi dianggap selesai begitu transaksi disubmit ulang
+	if err := tx.Model(&models.TransactionDisposalAsset{}).
+		Where("transaction_id = ?", transaction.ID).
+		Updates(map[string]interface{}{
+			"needs_revision": false,
+			"revision_notes": nil,
+		}).Error; err != nil {
 		tx.Rollback()
 		return nil, err
 	}
@@ -636,15 +659,13 @@ func autoCompleteDisposalApprovalRequest(userID, transactionNumber, transactionT
 		return err
 	}
 
-	if err := tx.Commit().Error; err != nil {
-		return err
-	}
-
-	// Lanjut otomatis ke tahap kesepakatan. Kalau flow-nya belum dikonfigurasi,
-	// error dikembalikan sebagai warning oleh pemanggil — transaksi tetap ada di
-	// APPROVAL_AGREEMENT dan bisa diajukan manual dari UI.
-	return InitiateDisposalApprovalAgreement(userID, transactionNumber,
-		dto.InitiateDisposalApprovalRequest{})
+	// Tidak ada auto-initiate approval di sini.
+	//
+	// Tahap kesepakatan tidak lagi dijalankan per transaksi: transaksi berhenti
+	// di APPROVAL_AGREEMENT dan menunggu dikelompokkan ke dalam sebuah
+	// disposal agreement (lihat disposal_agreement_service.go), yang punya
+	// nomor sendiri dan disetujui sekaligus oleh manajemen puncak.
+	return tx.Commit().Error
 }
 
 // ============================================================
@@ -757,6 +778,211 @@ func autoCompleteDisposalApprovalAgreement(userID, transactionNumber, transactio
 	}
 
 	return tx.Commit().Error
+}
+
+// disposalHasPendingRevision — true kalau ada aset yang sedang ditandai revisi.
+// Selama true, pengaju hanya boleh menyentuh aset yang ditandai.
+func disposalHasPendingRevision(transactionID uint) bool {
+	var count int64
+	config.DB.Model(&models.TransactionDisposalAsset{}).
+		Where("transaction_id = ? AND needs_revision = ? AND status = ?",
+			transactionID, true, models.DisposalAssetStatusPending).
+		Count(&count)
+	return count > 0
+}
+
+// assertAssetRevisable memastikan aset yang mau diubah memang bagian dari
+// revisi yang diminta approver.
+func assertAssetRevisable(transactionID uint, disposalAssetID uint) error {
+	if !disposalHasPendingRevision(transactionID) {
+		return nil
+	}
+
+	var da models.TransactionDisposalAsset
+	if err := config.DB.
+		Where("id = ? AND transaction_id = ?", disposalAssetID, transactionID).
+		First(&da).Error; err != nil {
+		return errors.New("disposal asset not found in this transaction")
+	}
+
+	if !da.NeedsRevision {
+		return fmt.Errorf("asset %s is not part of the requested revision", da.AssetNumber)
+	}
+
+	return nil
+}
+
+// ============================================================
+// REVISI
+// APPROVAL_REQUEST / APPROVAL_AGREEMENT → DRAFT
+// Approver step berjalan mengembalikan transaksi ke pembuatnya
+// ============================================================
+
+// currentPendingApproval mengambil baris approval yang sedang menunggu
+// (step pending pertama) untuk flow disposal mana pun pada transaksi ini.
+func currentPendingApproval(transactionNumber string) (*models.TransactionApproval, error) {
+	var approvals []models.TransactionApproval
+	if err := config.DB.
+		Preload("ApprovalFlowStep").
+		Where("transaction_number = ? AND transaction_type = ? AND status = ?",
+			transactionNumber, TxDisposalFlow, "pending").
+		Find(&approvals).Error; err != nil {
+		return nil, err
+	}
+
+	if len(approvals) == 0 {
+		return nil, errors.New("no pending approval found for this transaction")
+	}
+
+	// urutkan berdasarkan step_order — kolomnya ada di tabel lain, jadi
+	// pengurutannya dilakukan setelah fetch (sama seperti
+	// GetTransactionApprovalStatus)
+	current := approvals[0]
+	for _, item := range approvals[1:] {
+		if item.ApprovalFlowStep == nil || current.ApprovalFlowStep == nil {
+			continue
+		}
+		if item.ApprovalFlowStep.StepOrder < current.ApprovalFlowStep.StepOrder {
+			current = item
+		}
+	}
+
+	return &current, nil
+}
+
+// ReviseDisposal mengembalikan transaksi ke DRAFT supaya pembuatnya bisa
+// memperbaiki aset/dokumen lalu submit ulang.
+//
+// Berbeda dengan RejectDisposal yang bersifat terminal (stage REJECTED, aset
+// dilepas), revisi menyisakan draft-nya utuh — aset tetap menempel dan dokumen
+// yang sudah diupload tidak dihapus.
+func ReviseDisposal(userID string, transactionNumber string, req dto.ReviseDisposalRequest) (*dto.DisposalDetailResponse, error) {
+	transaction, err := getDisposalTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	// Hanya dari stage approval. Stage lain sengaja tidak diizinkan: mulai
+	// EXECUTE ke atas sudah ada efek samping (dokumen hasil, penghapusan aset)
+	// yang tidak bisa dibatalkan hanya dengan memindahkan stage.
+	if transaction.CurrentStage != models.StageDisposalApprovalRequest &&
+		transaction.CurrentStage != models.StageDisposalApprovalAgreement {
+		return nil, fmt.Errorf("cannot revise transaction in %s stage", transaction.CurrentStage)
+	}
+
+	// Yang boleh meminta revisi adalah approver step yang sedang berjalan —
+	// aturannya sama dengan ApproveTransaction.
+	pending, err := currentPendingApproval(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	authorized := false
+	if pending.ApproverUserID != nil && *pending.ApproverUserID == userID {
+		authorized = true
+	}
+	if !authorized && pending.ApproverRoleID != nil {
+		authorized = userHasRole(userID, *pending.ApproverRoleID)
+	}
+	if !authorized {
+		return nil, errors.New("you are not the approver of the current step")
+	}
+
+	if err := validateApproverBranch(userID, transactionNumber, TxDisposalFlow); err != nil {
+		return nil, err
+	}
+
+	// Aset yang ditandai harus benar-benar milik transaksi ini dan masih aktif
+	var targets []models.TransactionDisposalAsset
+	if err := config.DB.
+		Where("transaction_id = ? AND id IN ? AND status = ?",
+			transaction.ID, req.DisposalAssetIDs, models.DisposalAssetStatusPending).
+		Find(&targets).Error; err != nil {
+		return nil, err
+	}
+
+	if len(targets) != len(req.DisposalAssetIDs) {
+		return nil, errors.New("some selected assets do not belong to this transaction or are no longer active")
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Bersihkan penanda lama dulu supaya sisa revisi sebelumnya tidak menumpuk
+	if err := tx.Model(&models.TransactionDisposalAsset{}).
+		Where("transaction_id = ?", transaction.ID).
+		Updates(map[string]interface{}{
+			"needs_revision": false,
+			"revision_notes": nil,
+		}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Model(&models.TransactionDisposalAsset{}).
+		Where("transaction_id = ? AND id IN ?", transaction.ID, req.DisposalAssetIDs).
+		Updates(map[string]interface{}{
+			"needs_revision": true,
+			"revision_notes": req.RevisionNotes,
+		}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Semua baris approval disposal dibuang supaya submit ulang bisa
+	// meng-initiate flow dari awal. Tanpa ini, InitiateTransactionApproval
+	// menolak dengan "approval already initiated" karena pengecekannya per
+	// flow_id dan barisnya masih ada.
+	if err := tx.Where("transaction_number = ? AND transaction_type = ?",
+		transactionNumber, TxDisposalFlow).
+		Delete(&models.TransactionApproval{}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Tanda tangan lama tidak dihapus (jejak audit), cuma tidak lagi dianggap
+	// yang terbaru — submit ulang akan membuat tanda tangan baru.
+	if err := tx.Model(&models.ApprovalSignature{}).
+		Where("transaction_number = ? AND transaction_type = ?",
+			transactionNumber, TxDisposalFlow).
+		Update("is_recent", false).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Nomor permohonan/kesepakatan ikut dikosongkan — akan diisi lagi saat
+	// transaksi disubmit ulang.
+	if err := tx.Model(transaction).
+		Updates(map[string]interface{}{
+			"approval_request_number":   nil,
+			"approval_agreement_number": nil,
+		}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageDisposalDraft); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageDisposalDraft,
+		models.ActionRevise, userID, nil, &req.RevisionNotes); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetDisposalDetail(transactionNumber)
 }
 
 // ============================================================
@@ -1059,18 +1285,15 @@ func ConfirmDisposalAssetDeletion(userID string, transactionNumber string, req d
 // REJECT
 // ============================================================
 
-func RejectDisposal(userID string, transactionNumber string, req dto.RejectDisposalRequest) (*dto.DisposalDetailResponse, error) {
-	transaction, err := getDisposalTransaction(transactionNumber)
-	if err != nil {
-		return nil, err
-	}
-
-	if transaction.CurrentStage == models.StageDisposalDraft ||
-		transaction.CurrentStage == models.StageDisposalFinished ||
-		transaction.CurrentStage == models.StageDisposalRejected {
-		return nil, fmt.Errorf("cannot reject transaction in %s stage", transaction.CurrentStage)
-	}
-
+// terminateDisposal menutup transaksi disposal: aset dilepas kembali ke
+// AVAILABLE, baris disposal asset ditandai CANCELLED, stage pindah ke stage
+// terminal yang diminta, lalu nomor transaksi dilepas dari reservoir.
+//
+// Dipakai oleh tiga jalur yang berbeda aktornya:
+//   - RejectDisposal   → pemegang permission reject_transaction
+//   - autoRejectDisposal → approver step berjalan (lewat /transaction-approvals/reject)
+//   - CancelDisposal   → pengaju transaksi itu sendiri
+func terminateDisposal(userID string, transaction *models.Transaction, toStage, action, reason string) error {
 	tx := config.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -1078,7 +1301,6 @@ func RejectDisposal(userID string, transactionNumber string, req dto.RejectDispo
 		}
 	}()
 
-	// Kembalikan semua asset status → ACTIVE
 	var disposalAssets []models.TransactionDisposalAsset
 	config.DB.Where("transaction_id = ? AND status = ?", transaction.ID, models.DisposalAssetStatusPending).
 		Find(&disposalAssets)
@@ -1088,32 +1310,127 @@ func RejectDisposal(userID string, transactionNumber string, req dto.RejectDispo
 			Where("id = ?", da.AssetID).
 			Update("asset_status", models.AssetStatusAvailable).Error; err != nil {
 			tx.Rollback()
-			return nil, err
+			return err
 		}
 
 		if err := tx.Model(&da).Update("status", models.DisposalAssetStatusCancelled).Error; err != nil {
 			tx.Rollback()
-			return nil, err
+			return err
 		}
 	}
 
 	fromStage := transaction.CurrentStage
-	if err := updateTransactionStage(tx, transaction, models.StageDisposalRejected); err != nil {
+	if err := updateTransactionStage(tx, transaction, toStage); err != nil {
 		tx.Rollback()
+		return err
+	}
+
+	if err := recordStage(tx, transaction.ID, transaction.TransactionNumber,
+		fromStage, toStage,
+		action, userID, nil, &reason); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	MarkTransactionAsExpired(transaction.TransactionNumber)
+
+	return tx.Commit().Error
+}
+
+func RejectDisposal(userID string, transactionNumber string, req dto.RejectDisposalRequest) (*dto.DisposalDetailResponse, error) {
+	transaction, err := getDisposalTransaction(transactionNumber)
+	if err != nil {
 		return nil, err
 	}
 
-	reason := req.Reason
-	if err := recordStage(tx, transaction.ID, transactionNumber,
-		fromStage, models.StageDisposalRejected,
-		models.ActionReject, userID, nil, &reason); err != nil {
-		tx.Rollback()
+	if isDisposalTerminalStage(transaction.CurrentStage) ||
+		transaction.CurrentStage == models.StageDisposalDraft {
+		return nil, fmt.Errorf("cannot reject transaction in %s stage", transaction.CurrentStage)
+	}
+
+	if err := terminateDisposal(userID, transaction,
+		models.StageDisposalRejected, models.ActionReject, req.Reason); err != nil {
 		return nil, err
 	}
 
-	MarkTransactionAsExpired(transactionNumber)
+	return GetDisposalDetail(transactionNumber)
+}
 
-	if err := tx.Commit().Error; err != nil {
+// isDisposalTerminalStage — stage yang sudah tidak bisa diapa-apakan lagi
+func isDisposalTerminalStage(stage string) bool {
+	return stage == models.StageDisposalFinished ||
+		stage == models.StageDisposalRejected ||
+		stage == models.StageDisposalCancelled
+}
+
+// autoRejectDisposal — dipanggil setelah salah satu step approval di-reject.
+//
+// Sebelumnya hanya autoRejectTransaction (khusus procurement) yang dipanggil,
+// jadi reject step pada disposal cuma mengubah baris approval-nya: transaksi
+// tetap menggantung di APPROVAL_REQUEST dan asetnya tidak pernah dilepas.
+func autoRejectDisposal(userID, transactionNumber, transactionType, notes string) error {
+	if transactionType != TxDisposalFlow {
+		return nil
+	}
+
+	transaction, err := getDisposalTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	if isDisposalTerminalStage(transaction.CurrentStage) {
+		return nil
+	}
+
+	reason := "Rejected by approver"
+	if notes != "" {
+		reason = notes
+	}
+
+	return terminateDisposal(userID, transaction,
+		models.StageDisposalRejected, models.ActionReject, reason)
+}
+
+// CancelDisposal — pembatalan oleh PENGAJU transaksi.
+//
+// Berbeda dengan reject yang datang dari approver di stage berjalan,
+// pembatalan datang dari pembuatnya sendiri dan berakhir di stage CANCELLED
+// supaya keduanya bisa dibedakan di laporan maupun riwayat stage.
+func CancelDisposal(userID string, transactionNumber string, req dto.CancelDisposalRequest) (*dto.DisposalDetailResponse, error) {
+	transaction, err := getDisposalTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("only the creator can cancel this transaction")
+	}
+
+	if isDisposalTerminalStage(transaction.CurrentStage) {
+		return nil, fmt.Errorf("cannot cancel transaction in %s stage", transaction.CurrentStage)
+	}
+
+	// Mulai EXECUTE sudah ada efek samping (dokumen hasil, penghapusan aset)
+	// yang tidak bisa dibatalkan hanya dengan memindahkan stage.
+	cancelableStages := map[string]bool{
+		models.StageDisposalDraft:             true,
+		models.StageDisposalPurchasing:        true,
+		models.StageDisposalApprovalRequest:   true,
+		models.StageDisposalApprovalAgreement: true,
+	}
+	if !cancelableStages[transaction.CurrentStage] {
+		return nil, fmt.Errorf("cannot cancel transaction in %s stage, it is already being executed", transaction.CurrentStage)
+	}
+
+	// Approval yang sudah terbentuk ikut dibuang supaya tidak menggantung
+	if err := config.DB.
+		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, TxDisposalFlow).
+		Delete(&models.TransactionApproval{}).Error; err != nil {
+		return nil, err
+	}
+
+	if err := terminateDisposal(userID, transaction,
+		models.StageDisposalCancelled, models.ActionCancel, req.Reason); err != nil {
 		return nil, err
 	}
 
@@ -1157,6 +1474,8 @@ func GetDisposalDetail(transactionNumber string) (*dto.DisposalDetailResponse, e
 			DocumentNumber:    da.DocumentNumber,
 			Notes:             da.Notes,
 			Status:            da.Status,
+			NeedsRevision:     da.NeedsRevision,
+			RevisionNotes:     da.RevisionNotes,
 			CreatedAt:         da.CreatedAt,
 			UpdatedAt:         da.UpdatedAt,
 		}
@@ -1279,6 +1598,11 @@ func UploadDisposalAttachment(
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("disposal asset not found")
 		}
+		return nil, err
+	}
+
+	// Selama revisi, upload hanya untuk aset yang ditandai approver
+	if err := assertAssetRevisable(disposalAsset.TransactionID, disposalAsset.ID); err != nil {
 		return nil, err
 	}
 
@@ -1475,6 +1799,68 @@ func GetDisposalAttachmentStatus(transactionNumber string, transactionID uint, s
 // ============================================================
 // HELPERS INTERNAL
 // ============================================================
+
+// GetDisposalAttachmentFile mengembalikan metadata + path absolut file
+// attachment untuk di-stream ke client.
+//
+// File tidak dilayani sebagai static folder karena butuh autentikasi —
+// dokumen disposal berisi data aset dan nilai jual.
+func GetDisposalAttachmentFile(attachmentID uint) (*models.TransactionDisposalAttachment, string, error) {
+	var att models.TransactionDisposalAttachment
+	if err := config.DB.First(&att, attachmentID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, "", errors.New("attachment not found")
+		}
+		return nil, "", err
+	}
+
+	// Path disimpan server saat upload, tapi tetap dipastikan tidak keluar dari
+	// folder penyimpanan sebelum dibuka.
+	cleanPath := filepath.Clean(att.FilePath)
+	storageRoot := filepath.Clean(AttachmentStoragePath)
+	if !strings.HasPrefix(cleanPath, storageRoot+string(os.PathSeparator)) {
+		return nil, "", errors.New("invalid attachment path")
+	}
+
+	if _, err := os.Stat(cleanPath); err != nil {
+		return nil, "", errors.New("attachment file is missing on the server")
+	}
+
+	return &att, cleanPath, nil
+}
+
+// assertDisposalDocsApproved memastikan tidak ada dokumen wajib yang belum
+// disetujui sebelum approver menyetujui step-nya.
+//
+// Dicek untuk seluruh stage yang sudah dilalui (termasuk stage berjalan),
+// bukan cuma DRAFT — jalur SELL punya dokumen di PURCHASING juga.
+func assertDisposalDocsApproved(transactionNumber string) error {
+	transaction, err := getDisposalTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	branchCode := GetCreatorBranchCode(transaction.CreatedBy)
+	stages := stagesForDisposalType(*transaction.DisposalType)
+
+	for _, stage := range stages {
+		// berhenti setelah stage berjalan
+		ok, err := checkAllDisposalAttachments(
+			transactionNumber, transaction.ID, stage, branchCode, true)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("there are %s documents that have not been approved yet, review them first", stage)
+		}
+
+		if stage == transaction.CurrentStage {
+			break
+		}
+	}
+
+	return nil
+}
 
 // checkAllDisposalAttachments — cek attachment di stage tertentu
 // requireApproved=true  → semua wajib APPROVED (untuk cek stage sebelumnya)

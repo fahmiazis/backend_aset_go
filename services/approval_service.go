@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -460,6 +461,103 @@ func DeleteApprovalFlowStep(id string) error {
 // TRANSACTION APPROVAL - INITIATE & PROCESS
 // ============================================================================
 
+// transactionCreatorID mengambil pembuat transaksi dari tabel transactions.
+// Dipakai untuk auto-approve step yang approver-nya adalah si pembuat sendiri.
+// Sengaja tidak memakai user yang memanggil endpoint initiate — untuk
+// POST /transaction-approvals/initiate pemanggilnya bisa saja admin, sementara
+// yang "menandatangani" tetap pembuat transaksi.
+func transactionCreatorID(transactionNumber string) (string, error) {
+	var transaction models.Transaction
+	if err := config.DB.
+		Select("created_by").
+		Where("transaction_number = ?", transactionNumber).
+		First(&transaction).Error; err == nil {
+		return transaction.CreatedBy, nil
+	}
+
+	// Agreement disposal punya nomor sendiri dan tidak ada di tabel transactions
+	var agreement models.DisposalAgreement
+	if err := config.DB.
+		Select("created_by").
+		Where("agreement_number = ?", transactionNumber).
+		First(&agreement).Error; err != nil {
+		return "", err
+	}
+	return agreement.CreatedBy, nil
+}
+
+// userHasRole — aturannya sama dengan pengecekan di ApproveTransaction.
+func userHasRole(userID, roleID string) bool {
+	var count int64
+	config.DB.Model(&models.UserRole{}).
+		Where("user_id = ? AND role_id = ?", userID, roleID).
+		Count(&count)
+	return count > 0
+}
+
+// runPostApprovalHooks menjalankan auto-complete per jenis transaksi.
+// Masing-masing fungsi sudah memfilter transaction_type-nya sendiri.
+// Dipakai setelah approve manual maupun setelah auto-approve saat initiate.
+// validateAgreementApproverBranches memastikan approver punya akses ke semua
+// cabang yang transaksinya ikut dalam agreement.
+func validateAgreementApproverBranches(approverUserID, agreementNumber string) error {
+	memberBranches, err := agreementMemberBranches(agreementNumber)
+	if err != nil {
+		return err
+	}
+
+	var approverBranches []models.UserBranch
+	if err := config.DB.
+		Preload("Branch").
+		Where("user_id = ?", approverUserID).
+		Find(&approverBranches).Error; err != nil {
+		return fmt.Errorf("failed to get approver branches: %w", err)
+	}
+
+	owned := map[string]bool{}
+	for _, ub := range approverBranches {
+		if ub.Branch != nil {
+			owned[ub.Branch.BranchCode] = true
+		}
+	}
+
+	missing := make([]string, 0)
+	for _, branch := range memberBranches {
+		if !owned[branch] {
+			missing = append(missing, branch)
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("you do not have access to branch %s, which is part of this agreement",
+			strings.Join(missing, ", "))
+	}
+
+	return nil
+}
+
+func runPostApprovalHooks(userID, transactionNumber, transactionType string) {
+	if err := autoCompleteProcurementApproval(userID, transactionNumber, transactionType); err != nil {
+		fmt.Printf("auto complete procurement approval warning: %v\n", err)
+	}
+
+	if err := autoCompleteMutationApproval(userID, transactionNumber, transactionType); err != nil {
+		fmt.Printf("auto complete mutation approval warning: %v\n", err)
+	}
+
+	if err := autoCompleteDisposalApprovalRequest(userID, transactionNumber, transactionType); err != nil {
+		fmt.Printf("auto complete disposal approval request warning: %v\n", err)
+	}
+
+	if err := autoCompleteDisposalApprovalAgreement(userID, transactionNumber, transactionType); err != nil {
+		fmt.Printf("auto complete disposal approval agreement warning: %v\n", err)
+	}
+
+	if err := autoCompleteDisposalAgreement(userID, transactionNumber, transactionType); err != nil {
+		fmt.Printf("auto complete disposal agreement warning: %v\n", err)
+	}
+}
+
 // InitiateTransactionApproval creates all approval records for a transaction based on flow
 func InitiateTransactionApproval(req dto.CreateTransactionApprovalRequest) error {
 	// Get approval flow
@@ -497,6 +595,20 @@ func InitiateTransactionApproval(req dto.CreateTransactionApprovalRequest) error
 		// return err
 	}
 
+	// Pembuat transaksi sering juga menjadi approver di step pertama (PIC yang
+	// mengajukan menandatangani permohonannya sendiri). Step seperti itu
+	// di-approve otomatis supaya dia tidak perlu menyetujui pengajuannya
+	// sendiri secara manual, dan flow langsung lompat ke approver berikutnya.
+	//
+	// Hanya berlaku untuk step di BARISAN DEPAN: begitu ketemu satu step yang
+	// approver-nya bukan si pembuat, sisanya tetap pending. Step milik pembuat
+	// yang berada di tengah/akhir flow (misal peran receiver) tetap harus
+	// disetujui manual karena maknanya berbeda.
+	creatorID, creatorErr := transactionCreatorID(req.TransactionNumber)
+	autoApprove := creatorErr == nil && creatorID != ""
+	now := time.Now()
+	allApproved := true
+
 	// Create approval records for each step
 	for _, step := range flow.FlowSteps {
 		approval := models.TransactionApproval{
@@ -519,9 +631,52 @@ func InitiateTransactionApproval(req dto.CreateTransactionApprovalRequest) error
 			approval.StatusView = "hidden"
 		}
 
+		// approver step ini adalah si pembuat transaksi?
+		isCreatorStep := autoApprove &&
+			step.RoleID != nil &&
+			userHasRole(creatorID, *step.RoleID)
+
+		if isCreatorStep {
+			notes := "Auto-approved: pembuat transaksi adalah approver di step ini"
+			approval.Status = "approved"
+			approval.ApprovedAt = &now
+			approval.ApprovedBy = &creatorID
+			approval.Notes = &notes
+		} else {
+			// step pertama yang bukan milik pembuat menghentikan auto-approve
+			autoApprove = false
+			allApproved = false
+		}
+
 		if err := config.DB.Create(&approval).Error; err != nil {
 			return err
 		}
+
+		// Signature dibuat juga untuk auto-approve, supaya jejaknya sama
+		// dengan approve manual di ApproveTransaction.
+		if isCreatorStep {
+			signature := models.ApprovalSignature{
+				TransactionNumber: req.TransactionNumber,
+				TransactionType:   req.TransactionType,
+				UserID:            creatorID,
+				RoleID:            step.RoleID,
+				StepRole:          step.StepRole,
+				SignedAt:          now,
+				Status:            "signed",
+				Notes:             approval.Notes,
+				IsRecent:          true,
+			}
+
+			if err := config.DB.Create(&signature).Error; err != nil {
+				return err
+			}
+		}
+	}
+
+	// Kalau SELURUH step ternyata milik pembuat, tidak akan ada approve manual
+	// yang memicu transisi stage — jadi hook-nya dipanggil dari sini.
+	if allApproved && len(flow.FlowSteps) > 0 {
+		runPostApprovalHooks(creatorID, req.TransactionNumber, req.TransactionType)
 	}
 
 	return nil
@@ -565,6 +720,15 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 		return err
 	}
 
+	// Dokumen wajib harus sudah direview dulu. Sebelumnya approve sama sekali
+	// tidak memeriksa attachment, jadi transaksi bisa disetujui walau dokumen
+	// pendukungnya masih PENDING atau malah REJECTED.
+	if approval.TransactionType == TxDisposalFlow {
+		if err := assertDisposalDocsApproved(approval.TransactionNumber); err != nil {
+			return err
+		}
+	}
+
 	// Update approval
 	now := time.Now()
 	updates := map[string]interface{}{
@@ -595,26 +759,11 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 		return err
 	}
 
-	// Auto-trigger complete approval jika semua step sudah approved
-	if err := autoCompleteProcurementApproval(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
-		fmt.Printf("auto complete procurement approval warning: %v\n", err)
-	}
-
-	// Auto-trigger untuk mutasi
-	if err := autoCompleteMutationApproval(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
-		fmt.Printf("auto complete mutation approval warning: %v\n", err)
-	}
-
-	// Auto-trigger untuk disposal — dua tahap, masing-masing punya flow sendiri.
-	// Sebelumnya kedua fungsi ini tidak pernah dipanggil dari mana pun sehingga
-	// disposal mandek di APPROVAL_REQUEST walau semua step sudah approved.
-	if err := autoCompleteDisposalApprovalRequest(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
-		fmt.Printf("auto complete disposal approval request warning: %v\n", err)
-	}
-
-	if err := autoCompleteDisposalApprovalAgreement(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
-		fmt.Printf("auto complete disposal approval agreement warning: %v\n", err)
-	}
+	// Auto-trigger complete approval jika semua step sudah approved.
+	// Disposal punya dua tahap dengan flow masing-masing; sebelumnya kedua
+	// fungsinya tidak pernah dipanggil sehingga disposal mandek di
+	// APPROVAL_REQUEST walau semua step sudah approved.
+	runPostApprovalHooks(userID, approval.TransactionNumber, approval.TransactionType)
 
 	return nil
 }
@@ -687,8 +836,23 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 		return err
 	}
 
+	// FIX: dulu di sini `*req.Notes` langsung di-dereference, padahal Notes
+	// adalah pointer opsional — reject tanpa catatan bikin panic nil pointer.
+	notesText := ""
+	if req.Notes != nil {
+		notesText = *req.Notes
+	}
+
 	// Auto-reject transaksi jika approval di-reject
-	if err := autoRejectTransaction(userID, approval.TransactionNumber, approval.TransactionType, *req.Notes); err != nil {
+	if err := autoRejectDisposalAgreement(userID, approval.TransactionNumber, approval.TransactionType, notesText); err != nil {
+		fmt.Printf("auto reject disposal agreement warning: %v\n", err)
+	}
+
+	if err := autoRejectDisposal(userID, approval.TransactionNumber, approval.TransactionType, notesText); err != nil {
+		fmt.Printf("auto reject disposal warning: %v\n", err)
+	}
+
+	if err := autoRejectTransaction(userID, approval.TransactionNumber, approval.TransactionType, notesText); err != nil {
 		fmt.Printf("auto reject transaction warning: %v\n", err)
 	}
 
@@ -1013,6 +1177,13 @@ func mapTransactionApprovalsToResponse(approvals []models.TransactionApproval) [
 // }
 
 func validateApproverBranch(approverUserID, transactionNumber, transactionType string) error {
+	// Agreement menggabungkan transaksi dari banyak cabang, jadi tidak ada
+	// satu "cabang pembuat" untuk dibandingkan. Approver wajib punya akses ke
+	// SELURUH cabang anggotanya.
+	if transactionType == TxDisposalAgreement {
+		return validateAgreementApproverBranches(approverUserID, transactionNumber)
+	}
+
 	// Ambil transaksi untuk dapat CreatedBy
 	var transaction models.Transaction
 	if err := config.DB.

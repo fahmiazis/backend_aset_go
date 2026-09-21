@@ -66,11 +66,14 @@ func CreateUser(c *gin.Context) {
 		services.UpdateUser(user.ID, updateReq)
 	}
 
-	if len(req.RoleIDs) > 0 {
-		assignReq := dto.AssignRoleRequest{
-			RoleIDs: req.RoleIDs,
-		}
-		services.AssignRoles(user.ID, assignReq)
+	// FIX: error AssignRoles dulu diabaikan — user tercipta tanpa role tapi
+	// API tetap membalas "User created successfully", padahal user tanpa role
+	// ditolak semua endpoint ber-permission.
+	assignReq := dto.AssignRoleRequest{RoleIDs: req.RoleIDs}
+	if err := services.AssignRoles(user.ID, assignReq); err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest,
+			"user created but role assignment failed: "+err.Error())
+		return
 	}
 
 	utils.SuccessResponse(c, http.StatusCreated, "User created successfully", gin.H{

@@ -98,6 +98,25 @@ type RejectDisposalRequest struct {
 }
 
 // ============================================================
+// REVISI — approver mengembalikan transaksi ke DRAFT
+// ============================================================
+
+type ReviseDisposalRequest struct {
+	RevisionNotes string `json:"revision_notes" binding:"required,min=5"`
+	// id baris transaction_disposal_assets yang perlu diperbaiki.
+	// Wajib minimal satu — revisi selalu punya sasaran yang jelas.
+	DisposalAssetIDs []uint `json:"disposal_asset_ids" binding:"required,min=1"`
+}
+
+// ============================================================
+// CANCEL — pengaju membatalkan transaksinya sendiri
+// ============================================================
+
+type CancelDisposalRequest struct {
+	Reason string `json:"reason" binding:"required,min=5"`
+}
+
+// ============================================================
 // UPLOAD ATTACHMENT
 // ============================================================
 
@@ -154,6 +173,8 @@ type DisposalAssetResponse struct {
 	DocumentNumber    *string                      `json:"document_number"`
 	Notes             *string                      `json:"notes"`
 	Status            string                       `json:"status"`
+	NeedsRevision     bool                         `json:"needs_revision"`
+	RevisionNotes     *string                      `json:"revision_notes"`
 	Attachments       []DisposalAttachmentResponse `json:"attachments,omitempty"`
 	CreatedAt         time.Time                    `json:"created_at"`
 	UpdatedAt         time.Time                    `json:"updated_at"`

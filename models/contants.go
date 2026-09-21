@@ -7,6 +7,7 @@ const (
 	TransactionStatusRejected   = "REJECTED"
 	TransactionStatusPending    = "PENDING"
 	TransactionStatusProcessing = "PROCESSING"
+	TransactionStatusCancelled  = "CANCELLED"
 )
 
 const (

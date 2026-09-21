@@ -146,27 +146,43 @@ func AssignRoles(userID string, req dto.AssignRoleRequest) error {
 		return err
 	}
 
-	// Delete existing roles
-	if err := config.DB.Where("user_id = ?", userID).Delete(&models.UserRole{}).Error; err != nil {
+	// Satu user = satu role. Ditegakkan di sini juga, bukan hanya lewat
+	// binding, supaya pemanggil internal ikut terjaga.
+	if len(req.RoleIDs) != 1 {
+		return errors.New("a user must have exactly one role")
+	}
+
+	roleID := req.RoleIDs[0]
+
+	// Role divalidasi SEBELUM role lama dihapus. Dulu id yang tidak dikenal
+	// hanya di-`continue`, jadi user bisa berakhir tanpa role sama sekali
+	// tanpa ada error — padahal semua endpoint ber-permission akan menolaknya.
+	var role models.Role
+	if err := config.DB.First(&role, "id = ?", roleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("role not found")
+		}
 		return err
 	}
 
-	// Assign new roles
-	for _, roleID := range req.RoleIDs {
-		// Check if role exists
-		var role models.Role
-		if err := config.DB.First(&role, "id = ?", roleID).Error; err != nil {
-			continue // Skip invalid role IDs
+	// Ganti role dalam satu transaksi supaya tidak ada jeda di mana user
+	// kehilangan seluruh rolenya.
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
 		}
+	}()
 
-		userRole := models.UserRole{
-			UserID: userID,
-			RoleID: roleID,
-		}
-		if err := config.DB.Create(&userRole).Error; err != nil {
-			return err
-		}
+	if err := tx.Where("user_id = ?", userID).Delete(&models.UserRole{}).Error; err != nil {
+		tx.Rollback()
+		return err
 	}
 
-	return nil
+	if err := tx.Create(&models.UserRole{UserID: userID, RoleID: roleID}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit().Error
 }
