@@ -419,13 +419,13 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, errors.New("cannot submit stock opname with no assets")
 	}
 
-	var photoAssetIDs []uint
-	config.DB.Model(&models.StockOpnameAssetPhoto{}).
-		Where("transaction_id = ?", transaction.ID).
-		Pluck("asset_id", &photoAssetIDs)
-	hasPhoto := make(map[uint]bool, len(photoAssetIDs))
-	for _, id := range photoAssetIDs {
-		hasPhoto[id] = true
+	var photos []models.StockOpnameAssetPhoto
+	if err := config.DB.Where("transaction_id = ?", transaction.ID).Find(&photos).Error; err != nil {
+		return nil, err
+	}
+	photoByAsset := make(map[uint]models.StockOpnameAssetPhoto, len(photos))
+	for _, p := range photos {
+		photoByAsset[p.AssetID] = p
 	}
 
 	var borrowDocAssetIDs []uint
@@ -447,12 +447,26 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, err
 	}
 
+	now := time.Now()
+
 	for _, item := range items {
 		if item.PhysicalStatus == "" || item.Condition == "" {
 			return nil, fmt.Errorf("finding not yet filled for asset %s", item.AssetNumber)
 		}
-		if !hasPhoto[item.AssetID] {
+		photo, hasPhoto := photoByAsset[item.AssetID]
+		if !hasPhoto {
 			return nil, fmt.Errorf("foto bukti fisik belum dilampirkan untuk asset %s", item.AssetNumber)
+		}
+		// Validasi upload-time (lihat UploadStockOpnameAssetPhoto) cuma cek
+		// tanggal modifikasi file relatif ke SAAT UPLOAD — draft yang dibiarkan
+		// lama sebelum di-submit bisa lolos padahal fotonya udah basi. Di sini
+		// dicek ulang relatif ke SAAT SUBMIT, pakai created_at (kapan foto
+		// itu benar-benar sampai ke server), bukan captured_at.
+		if now.Sub(photo.CreatedAt) > stockOpnamePhotoMaxAge {
+			return nil, fmt.Errorf(
+				"foto bukti fisik untuk asset %s sudah diupload lebih dari 10 hari sebelum submit (upload: %s) — upload ulang foto yang lebih baru",
+				item.AssetNumber, photo.CreatedAt.Format("02 Jan 2006"),
+			)
 		}
 		if physicalMap[item.PhysicalStatus].RequiresBorrowDocument && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
 			return nil, fmt.Errorf("dokumen peminjaman belum dilampirkan untuk asset %s", item.AssetNumber)
@@ -487,7 +501,7 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 	// IsSubmissive cuma penanda kepatuhan jadwal (dinilai dari tanggal
 	// SUBMIT, bukan tanggal draft dibuat) — gak pernah menghalangi submit
 	// itu sendiri, submit di luar jendela tetap jalan seperti biasa.
-	isSubmissive := isWithinSubmissionWindow(time.Now(), soCfg.SubmissionStartDay, soCfg.SubmissionEndDay)
+	isSubmissive := isWithinSubmissionWindow(now, soCfg.SubmissionStartDay, soCfg.SubmissionEndDay)
 	if err := tx.Model(transaction).Update("is_submissive", isSubmissive).Error; err != nil {
 		tx.Rollback()
 		return nil, err
