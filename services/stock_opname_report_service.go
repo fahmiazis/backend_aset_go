@@ -46,6 +46,14 @@ type assetOpnameFact struct {
 	FoundPhysicalStatus string
 	FoundCondition      string
 	FoundAssetStatus    string
+
+	// Flag turunan dari master data (StockOpnamePhysicalStatusMaster /
+	// StockOpnameConditionMaster) buat FoundPhysicalStatus/FoundCondition di
+	// atas, dihitung sekali di gatherStockOpnameFacts supaya kode di bawah
+	// (dashboard, rekap, export) gak perlu query/lookup master data lagi per
+	// baris. Dulu ini switch/if literal ke string "MISSING"/"GOOD"/dst.
+	FoundPhysicalStatusCountsAsMissing bool
+	FoundConditionReportBucket         string // "BAIK" | "RUSAK" | ""
 }
 
 const (
@@ -230,6 +238,15 @@ func gatherStockOpnameFacts(month, year int, branchCode string) (facts []assetOp
 		itemByAsset[it.AssetID] = it
 	}
 
+	physicalStatusMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, nil, start, end, err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, nil, start, end, err
+	}
+
 	facts = make([]assetOpnameFact, 0, len(assets))
 	for _, a := range assets {
 		v := valueByAsset[a.ID]
@@ -258,6 +275,8 @@ func gatherStockOpnameFacts(month, year int, branchCode string) (facts []assetOp
 			f.FoundPhysicalStatus = it.PhysicalStatus
 			f.FoundCondition = it.Condition
 			f.FoundAssetStatus = it.AssetStatus
+			f.FoundPhysicalStatusCountsAsMissing = physicalStatusMap[it.PhysicalStatus].CountsAsMissing
+			f.FoundConditionReportBucket = conditionMap[it.Condition].ReportBucket
 		}
 		facts = append(facts, f)
 	}
@@ -312,16 +331,16 @@ func GetStockOpnameReportDashboard(filter dto.StockOpnameReportFilter) (*dto.Sto
 			condition.BelumIsi++
 			continue
 		}
-		if f.FoundPhysicalStatus == models.PhysicalStatusMissing {
+		if f.FoundPhysicalStatusCountsAsMissing {
 			physical.PhysicalTidakAda++
 			condition.TidakAda++
 			continue
 		}
 		physical.PhysicalAda++
-		switch f.FoundCondition {
-		case models.ConditionGood, models.ConditionFair:
+		switch f.FoundConditionReportBucket {
+		case "BAIK":
 			condition.Baik++
-		case models.ConditionPoor, models.ConditionBroken:
+		case "RUSAK":
 			condition.Rusak++
 		}
 	}
@@ -480,11 +499,10 @@ func buildRekapRows(facts []assetOpnameFact, scopedBranches []models.Branch) ([]
 		}
 
 		if f.HasOpnameThisPeriod && f.FoundCondition != "" {
-			switch f.FoundCondition {
-			case models.ConditionPoor, models.ConditionBroken:
+			if f.FoundConditionReportBucket == "RUSAK" {
 				rusakCount++
 			}
-			if f.FoundPhysicalStatus == models.PhysicalStatusMissing {
+			if f.FoundPhysicalStatusCountsAsMissing {
 				hilangCount++
 				sapAdaFisikTidak.AcquisitionValue += f.AcquisitionValue
 				sapAdaFisikTidak.AccumulatedDepreciation += f.AccumulatedDepreciation
@@ -506,7 +524,7 @@ func buildRekapRows(facts []assetOpnameFact, scopedBranches []models.Branch) ([]
 		}
 
 		// Area dianggap "clear" hanya kalau semua asset FINISH & fisik ketemu.
-		if !f.HasOpnameThisPeriod || f.OpnameStage != models.StageFinished || f.FoundPhysicalStatus == models.PhysicalStatusMissing {
+		if !f.HasOpnameThisPeriod || f.OpnameStage != models.StageFinished || f.FoundPhysicalStatusCountsAsMissing {
 			ba.fullyClearOK = false
 		}
 	}
@@ -671,10 +689,10 @@ func ExportStockOpnameReportExcel(filter dto.StockOpnameExportRequest) (*exceliz
 
 	writeSummarySheet(f, rekap, areaSummary, monthName, start.Year())
 	writeDetailListSheet(f, "SAP=FISIK", facts, func(x assetOpnameFact) bool {
-		return x.HasOpnameThisPeriod && x.OpnameStage == models.StageFinished && x.FoundPhysicalStatus != models.PhysicalStatusMissing
+		return x.HasOpnameThisPeriod && x.OpnameStage == models.StageFinished && !x.FoundPhysicalStatusCountsAsMissing
 	})
 	writeDetailListSheet(f, "SAP ADA FISIK TDK", facts, func(x assetOpnameFact) bool {
-		return x.HasOpnameThisPeriod && x.FoundPhysicalStatus == models.PhysicalStatusMissing
+		return x.HasOpnameThisPeriod && x.FoundPhysicalStatusCountsAsMissing
 	})
 	writeDetailListSheet(f, "MUTASI", facts, func(x assetOpnameFact) bool {
 		return x.CurrentAssetStatus == models.AssetStatusInMutation

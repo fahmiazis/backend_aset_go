@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -126,17 +127,32 @@ func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest
 // INPUT / UPDATE TEMUAN FISIK (masih DRAFT)
 // ============================================================
 
-// validateFindingPhysicalConditionPair mencegah kombinasi yang gak mungkin
-// terjadi: kalau fisik aset gak ada di lokasi (MISSING "Tidak Ada" atau
-// BORROWED "Dipinjam"), kondisinya wajib "Tidak Ada" (NOT_APPLICABLE) —
-// dan sebaliknya, kalau fisiknya "Ada" (EXISTS), kondisinya gak boleh
-// NOT_APPLICABLE karena harus dinilai.
-func validateFindingPhysicalConditionPair(physicalStatus, condition string) error {
-	if (physicalStatus == "MISSING" || physicalStatus == "BORROWED") && condition != "NOT_APPLICABLE" {
-		return fmt.Errorf("condition must be NOT_APPLICABLE when physical_status is %s", physicalStatus)
+// validateFindingPhysicalConditionPair memvalidasi bahwa physicalStatus &
+// condition beneran ada di master data (bukan hardcode lagi, lihat
+// services/stock_opname_status_master_service.go) DAN mencegah kombinasi
+// yang gak mungkin terjadi: kalau physicalStatus.RequiresNotApplicableCondition
+// true (dulu hardcode "MISSING"/"BORROWED"), condition WAJIB salah satu yang
+// IsNotApplicableValue — dan sebaliknya kalau false (dulu "EXISTS"), condition
+// JUSTRU DILARANG pakai nilai IsNotApplicableValue karena harus benar-benar
+// dinilai.
+func validateFindingPhysicalConditionPair(
+	physicalMap map[string]models.StockOpnamePhysicalStatusMaster,
+	conditionMap map[string]models.StockOpnameConditionMaster,
+	physicalStatus, condition string,
+) error {
+	pm, ok := physicalMap[physicalStatus]
+	if !ok {
+		return fmt.Errorf("physical_status tidak valid: %q", physicalStatus)
 	}
-	if physicalStatus == "EXISTS" && condition == "NOT_APPLICABLE" {
-		return errors.New("condition cannot be NOT_APPLICABLE when physical_status is EXISTS")
+	cm, ok := conditionMap[condition]
+	if !ok {
+		return fmt.Errorf("condition tidak valid: %q", condition)
+	}
+	if pm.RequiresNotApplicableCondition && !cm.IsNotApplicableValue {
+		return fmt.Errorf("condition must be a not-applicable value when physical_status is %s", physicalStatus)
+	}
+	if !pm.RequiresNotApplicableCondition && cm.IsNotApplicableValue {
+		return fmt.Errorf("condition cannot be a not-applicable value when physical_status is %s", physicalStatus)
 	}
 	return nil
 }
@@ -155,7 +171,15 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 		return nil, errors.New("you can only modify your own stock opname draft")
 	}
 
-	if err := validateFindingPhysicalConditionPair(req.PhysicalStatus, req.Condition); err != nil {
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, err
+	}
+	if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, req.PhysicalStatus, req.Condition); err != nil {
 		return nil, err
 	}
 
@@ -169,7 +193,7 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 		return nil, err
 	}
 
-	if req.PhysicalStatus == "BORROWED" {
+	if physicalMap[req.PhysicalStatus].RequiresBorrowDocument {
 		soCfg, err := getOrCreateStockOpnameConfig()
 		if err != nil {
 			return nil, err
@@ -244,6 +268,15 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 		return nil, err
 	}
 
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, err
+	}
+
 	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
 
 	for i, reqItem := range req.Items {
@@ -262,7 +295,7 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 		// selalu diloloskan di sini (representasi "field sengaja dikosongkan
 		// lagi" saat user ganti pilihan) — lihat komentar di dto.
 		if reqItem.PhysicalStatus != nil && *reqItem.PhysicalStatus != "" {
-			if _, ok := stockOpnamePhysicalStatusLabel[*reqItem.PhysicalStatus]; !ok {
+			if _, ok := physicalMap[*reqItem.PhysicalStatus]; !ok {
 				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 					Row: rowNum, AssetNumber: current.AssetNumber,
 					Message: fmt.Sprintf("status fisik tidak valid: %q", *reqItem.PhysicalStatus),
@@ -271,7 +304,7 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 			}
 		}
 		if reqItem.Condition != nil && *reqItem.Condition != "" {
-			if _, ok := stockOpnameConditionLabel[*reqItem.Condition]; !ok {
+			if _, ok := conditionMap[*reqItem.Condition]; !ok {
 				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 					Row: rowNum, AssetNumber: current.AssetNumber,
 					Message: fmt.Sprintf("kondisi tidak valid: %q", *reqItem.Condition),
@@ -302,7 +335,7 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 		// masih kosong berarti user masih di tengah proses ngisi cell lain,
 		// belum saatnya divalidasi silang.
 		if effectivePhysical != "" && effectiveCondition != "" {
-			if err := validateFindingPhysicalConditionPair(effectivePhysical, effectiveCondition); err != nil {
+			if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, effectivePhysical, effectiveCondition); err != nil {
 				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 					Row: rowNum, AssetNumber: current.AssetNumber, Message: err.Error(),
 				})
@@ -310,7 +343,7 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 			}
 		}
 
-		if effectivePhysical == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[current.AssetID] {
+		if physicalMap[effectivePhysical].RequiresBorrowDocument && soCfg.BorrowDocIsRequired && !hasBorrowDoc[current.AssetID] {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: current.AssetNumber,
 				Message: "dokumen peminjaman wajib diupload dulu sebelum menyimpan status Dipinjam",
@@ -409,6 +442,11 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, err
 	}
 
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, err
+	}
+
 	for _, item := range items {
 		if item.PhysicalStatus == "" || item.Condition == "" {
 			return nil, fmt.Errorf("finding not yet filled for asset %s", item.AssetNumber)
@@ -416,7 +454,7 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		if !hasPhoto[item.AssetID] {
 			return nil, fmt.Errorf("foto bukti fisik belum dilampirkan untuk asset %s", item.AssetNumber)
 		}
-		if item.PhysicalStatus == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
+		if physicalMap[item.PhysicalStatus].RequiresBorrowDocument && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
 			return nil, fmt.Errorf("dokumen peminjaman belum dilampirkan untuk asset %s", item.AssetNumber)
 		}
 	}
@@ -1015,34 +1053,74 @@ func GetAllStockOpnameDrafts(filter StockOpnameListFilter) ([]dto.StockOpnameFlo
 // ============================================================
 // EXCEL TEMPLATE — label <-> enum mapping
 // Dipakai bersama oleh download (enum -> label) dan upload (label -> enum).
+//
+// Physical status & condition SEKARANG master data (bukan map hardcode
+// lagi) — codeToLabel/labelToCode di bawah dibangun on-the-fly dari
+// loadStockOpnamePhysicalStatusMap()/loadStockOpnameConditionMap() supaya
+// status/kondisi baru yang ditambah admin lewat
+// /transactions/stock-opname/status-master/* otomatis kepake juga di excel.
+// Asset status TETAP hardcode (di luar scope master data ini).
 // ============================================================
 
-var stockOpnamePhysicalStatusLabel = map[string]string{
-	"EXISTS":   "Ada",
-	"MISSING":  "Tidak Ada",
-	"BORROWED": "Dipinjam",
+func codeToLabelPhysicalStatus(m map[string]models.StockOpnamePhysicalStatusMaster) map[string]string {
+	out := make(map[string]string, len(m))
+	for code, row := range m {
+		out[code] = row.Label
+	}
+	return out
 }
 
-var stockOpnamePhysicalStatusValue = map[string]string{
-	"ada":       "EXISTS",
-	"tidak ada": "MISSING",
-	"dipinjam":  "BORROWED",
+func labelToCodePhysicalStatus(m map[string]models.StockOpnamePhysicalStatusMaster) map[string]string {
+	out := make(map[string]string, len(m))
+	for code, row := range m {
+		out[strings.ToLower(strings.TrimSpace(row.Label))] = code
+	}
+	return out
 }
 
-var stockOpnameConditionLabel = map[string]string{
-	"GOOD":           "Baik",
-	"FAIR":           "Cukup",
-	"POOR":           "Kurang",
-	"BROKEN":         "Rusak Berat",
-	"NOT_APPLICABLE": "Tidak Ada",
+func codeToLabelCondition(m map[string]models.StockOpnameConditionMaster) map[string]string {
+	out := make(map[string]string, len(m))
+	for code, row := range m {
+		out[code] = row.Label
+	}
+	return out
 }
 
-var stockOpnameConditionValue = map[string]string{
-	"baik":        "GOOD",
-	"cukup":       "FAIR",
-	"kurang":      "POOR",
-	"rusak berat": "BROKEN",
-	"tidak ada":   "NOT_APPLICABLE",
+func labelToCodeCondition(m map[string]models.StockOpnameConditionMaster) map[string]string {
+	out := make(map[string]string, len(m))
+	for code, row := range m {
+		out[strings.ToLower(strings.TrimSpace(row.Label))] = code
+	}
+	return out
+}
+
+// sortedLabels: dipakai buat nyusun teks hint header excel (mis. "Status
+// Fisik (Ada/Tidak Ada/Dipinjam)") supaya opsi baru dari master data ikut
+// kelihatan tanpa perlu ubah kode tiap kali admin nambah status.
+func sortedLabelsPhysicalStatus(m map[string]models.StockOpnamePhysicalStatusMaster) []string {
+	rows := make([]models.StockOpnamePhysicalStatusMaster, 0, len(m))
+	for _, row := range m {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	labels := make([]string, len(rows))
+	for i, row := range rows {
+		labels[i] = row.Label
+	}
+	return labels
+}
+
+func sortedLabelsCondition(m map[string]models.StockOpnameConditionMaster) []string {
+	rows := make([]models.StockOpnameConditionMaster, 0, len(m))
+	for _, row := range m {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	labels := make([]string, len(rows))
+	for i, row := range rows {
+		labels[i] = row.Label
+	}
+	return labels
 }
 
 var stockOpnameAssetStatusLabel = map[string]string{
@@ -1085,14 +1163,25 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 		return nil, "", err
 	}
 
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, "", err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, "", err
+	}
+	physicalStatusLabel := codeToLabelPhysicalStatus(physicalMap)
+	conditionLabel := codeToLabelCondition(conditionMap)
+
 	f := excelize.NewFile()
 	f.SetSheetName("Sheet1", stockOpnameTemplateSheet)
 
 	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
 	headers := []string{
 		"No", "Nomor Asset", "Nama Asset", "Kategori",
-		"Status Fisik (Ada/Tidak Ada)",
-		"Kondisi (Baik/Cukup/Kurang/Rusak Berat/Tidak Ada)",
+		fmt.Sprintf("Status Fisik (%s)", strings.Join(sortedLabelsPhysicalStatus(physicalMap), "/")),
+		fmt.Sprintf("Kondisi (%s)", strings.Join(sortedLabelsCondition(conditionMap), "/")),
 		"Status Aset (opsional, kosongkan jika tidak berubah)",
 		"Catatan",
 	}
@@ -1121,8 +1210,8 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 			item.AssetNumber,
 			assetName,
 			categoryName,
-			stockOpnamePhysicalStatusLabel[item.PhysicalStatus],
-			stockOpnameConditionLabel[item.Condition],
+			physicalStatusLabel[item.PhysicalStatus],
+			conditionLabel[item.Condition],
 			stockOpnameAssetStatusLabel[item.AssetStatus],
 			notes,
 		}
@@ -1203,6 +1292,17 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 		return nil, err
 	}
 
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, err
+	}
+	physicalStatusValue := labelToCodePhysicalStatus(physicalMap)
+	conditionValue := labelToCodeCondition(conditionMap)
+
 	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
 
 	for i, row := range rows {
@@ -1225,30 +1325,32 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 			continue
 		}
 
-		physicalLabel := strings.ToLower(cellAt(row, 4))
-		conditionLabel := strings.ToLower(cellAt(row, 5))
+		physicalLabelCell := strings.ToLower(cellAt(row, 4))
+		conditionLabelCell := strings.ToLower(cellAt(row, 5))
 		assetStatusLabel := strings.ToLower(cellAt(row, 6))
 		notesCell := cellAt(row, 7)
 
-		physicalStatus, ok := stockOpnamePhysicalStatusValue[physicalLabel]
+		physicalStatus, ok := physicalStatusValue[physicalLabelCell]
 		if !ok {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
-				Message: fmt.Sprintf("status fisik tidak valid: %q (harus Ada / Tidak Ada / Dipinjam)", cellAt(row, 4)),
+				Message: fmt.Sprintf("status fisik tidak valid: %q (harus salah satu: %s)",
+					cellAt(row, 4), strings.Join(sortedLabelsPhysicalStatus(physicalMap), " / ")),
 			})
 			continue
 		}
 
-		condition, ok := stockOpnameConditionValue[conditionLabel]
+		condition, ok := conditionValue[conditionLabelCell]
 		if !ok {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
-				Message: fmt.Sprintf("kondisi tidak valid: %q", cellAt(row, 5)),
+				Message: fmt.Sprintf("kondisi tidak valid: %q (harus salah satu: %s)",
+					cellAt(row, 5), strings.Join(sortedLabelsCondition(conditionMap), " / ")),
 			})
 			continue
 		}
 
-		if err := validateFindingPhysicalConditionPair(physicalStatus, condition); err != nil {
+		if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, physicalStatus, condition); err != nil {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
 				Message: err.Error(),
@@ -1256,7 +1358,7 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 			continue
 		}
 
-		if physicalStatus == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
+		if physicalMap[physicalStatus].RequiresBorrowDocument && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
 				Message: "dokumen peminjaman wajib diupload dulu lewat aplikasi sebelum status Dipinjam bisa disimpan",
