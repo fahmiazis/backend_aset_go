@@ -130,27 +130,45 @@ func resolveReportPeriod(month, year int) (time.Time, time.Time) {
 // diminta) beserta nilai aktif (asset_values) dan temuan opname periode
 // berjalan (kalau ada). Satu query per sumber data (assets, branches,
 // asset_values, transaction_stock_opnames) — dihindari N+1 per baris.
-func gatherStockOpnameFacts(month, year int, branchCode string) ([]assetOpnameFact, time.Time, time.Time, error) {
-	start, end := resolveReportPeriod(month, year)
+//
+// Selain facts (per-asset), juga mengembalikan scopedBranches: daftar branch
+// yang harus tetap muncul di report (rekap per-branch, cost center, sheet
+// "tidak kirim") walaupun branch itu belum/tidak punya asset sama sekali —
+// sebelumnya branch seperti ini hilang total dari report karena semua
+// agregasi per-branch dibangun dari facts (yang sumbernya tabel assets).
+func gatherStockOpnameFacts(month, year int, branchCode string) (facts []assetOpnameFact, scopedBranches []models.Branch, start time.Time, end time.Time, err error) {
+	start, end = resolveReportPeriod(month, year)
 
 	assetQuery := config.DB.Model(&models.Asset{}).Preload("Category")
 	branchCode = strings.TrimSpace(branchCode)
-	if branchCode != "" && !strings.EqualFold(branchCode, "ALL") {
+	filterSingleBranch := branchCode != "" && !strings.EqualFold(branchCode, "ALL")
+	if filterSingleBranch {
 		assetQuery = assetQuery.Where("branch_code = ?", branchCode)
 	}
 
 	var assets []models.Asset
 	if err := assetQuery.Find(&assets).Error; err != nil {
-		return nil, start, end, fmt.Errorf("failed to load assets: %w", err)
+		return nil, nil, start, end, fmt.Errorf("failed to load assets: %w", err)
 	}
 
 	var branches []models.Branch
 	if err := config.DB.Find(&branches).Error; err != nil {
-		return nil, start, end, fmt.Errorf("failed to load branches: %w", err)
+		return nil, nil, start, end, fmt.Errorf("failed to load branches: %w", err)
 	}
 	branchByCode := make(map[string]models.Branch, len(branches))
 	for _, b := range branches {
 		branchByCode[b.BranchCode] = b
+	}
+
+	if filterSingleBranch {
+		for _, b := range branches {
+			if strings.EqualFold(b.BranchCode, branchCode) {
+				scopedBranches = []models.Branch{b}
+				break
+			}
+		}
+	} else {
+		scopedBranches = branches
 	}
 
 	assetIDs := make([]uint, len(assets))
@@ -162,7 +180,7 @@ func gatherStockOpnameFacts(month, year int, branchCode string) ([]assetOpnameFa
 	if len(assetIDs) > 0 {
 		var values []models.AssetValue
 		if err := config.DB.Where("asset_id IN ? AND is_active = ?", assetIDs, true).Find(&values).Error; err != nil {
-			return nil, start, end, fmt.Errorf("failed to load asset values: %w", err)
+			return nil, nil, start, end, fmt.Errorf("failed to load asset values: %w", err)
 		}
 		for _, v := range values {
 			valueByAsset[v.AssetID] = v
@@ -202,7 +220,7 @@ func gatherStockOpnameFacts(month, year int, branchCode string) ([]assetOpnameFa
 
 	var items []itemRow
 	if err := config.DB.Raw(unionQuery, args...).Scan(&items).Error; err != nil {
-		return nil, start, end, fmt.Errorf("failed to load stock opname items: %w", err)
+		return nil, nil, start, end, fmt.Errorf("failed to load stock opname items: %w", err)
 	}
 
 	// Map keyed by asset_id; karena di-order ASC, penulisan terakhir yang
@@ -212,7 +230,7 @@ func gatherStockOpnameFacts(month, year int, branchCode string) ([]assetOpnameFa
 		itemByAsset[it.AssetID] = it
 	}
 
-	facts := make([]assetOpnameFact, 0, len(assets))
+	facts = make([]assetOpnameFact, 0, len(assets))
 	for _, a := range assets {
 		v := valueByAsset[a.ID]
 		branch := branchByCode[derefStr(a.BranchCode)]
@@ -244,7 +262,7 @@ func gatherStockOpnameFacts(month, year int, branchCode string) ([]assetOpnameFa
 		facts = append(facts, f)
 	}
 
-	return facts, start, end, nil
+	return facts, scopedBranches, start, end, nil
 }
 
 // isAreaBranch: "AREA" di layout referensi = semua branch selain HO
@@ -258,7 +276,7 @@ func isAreaBranch(branchType string) bool {
 // ============================================================
 
 func GetStockOpnameReportDashboard(filter dto.StockOpnameReportFilter) (*dto.StockOpnameDashboardResponse, error) {
-	facts, start, end, err := gatherStockOpnameFacts(filter.Month, filter.Year, filter.BranchCode)
+	facts, _, start, end, err := gatherStockOpnameFacts(filter.Month, filter.Year, filter.BranchCode)
 	if err != nil {
 		return nil, err
 	}
@@ -362,13 +380,13 @@ func GetStockOpnameReportDashboard(filter dto.StockOpnameReportFilter) (*dto.Sto
 // ============================================================
 
 func GetStockOpnameReportDetail(filter dto.StockOpnameReportFilter) (*dto.StockOpnameDetailReportResponse, error) {
-	facts, start, end, err := gatherStockOpnameFacts(filter.Month, filter.Year, filter.BranchCode)
+	facts, scopedBranches, start, end, err := gatherStockOpnameFacts(filter.Month, filter.Year, filter.BranchCode)
 	if err != nil {
 		return nil, err
 	}
 
-	rekap, areaSummary := buildRekapRows(facts)
-	costCenters := buildCostCenterRows(facts, 10)
+	rekap, areaSummary := buildRekapRows(facts, scopedBranches)
+	costCenters := buildCostCenterRows(facts, scopedBranches, 10)
 
 	resolvedBranch := strings.TrimSpace(filter.BranchCode)
 	if resolvedBranch == "" {
@@ -392,7 +410,7 @@ func GetStockOpnameReportDetail(filter dto.StockOpnameReportFilter) (*dto.StockO
 	}, nil
 }
 
-func buildRekapRows(facts []assetOpnameFact) ([]dto.StockOpnameRekapRow, dto.StockOpnameAreaSummary) {
+func buildRekapRows(facts []assetOpnameFact, scopedBranches []models.Branch) ([]dto.StockOpnameRekapRow, dto.StockOpnameAreaSummary) {
 	var sapFisikArea, sapFisikHO, sapAdaFisikTidak, assetMutasi dto.StockOpnameRekapRow
 	sapFisikArea.Label = "SAP = FISIK AREA"
 	sapFisikArea.Supported = true
@@ -421,6 +439,14 @@ func buildRekapRows(facts []assetOpnameFact) ([]dto.StockOpnameRekapRow, dto.Sto
 		accumDep     float64
 	}
 	branchAggs := map[string]*branchAgg{}
+	// Seed dengan SEMUA branch dalam scope dulu (walau belum/tidak punya
+	// asset sama sekali), supaya branch itu tetap muncul di "Total Area yang
+	// tidak kirim" dan hitungan Area Clear/Tidak Clear dengan nilai 0 —
+	// sebelumnya branch tanpa asset hilang total karena map ini cuma dibangun
+	// dari facts (asset yang benar-benar ada).
+	for _, b := range scopedBranches {
+		branchAggs[b.BranchCode] = &branchAgg{branchType: b.BranchType, branchName: b.BranchName, fullyClearOK: true}
+	}
 
 	for _, f := range facts {
 		assetBalance.AcquisitionValue += f.AcquisitionValue
@@ -579,13 +605,18 @@ func buildRekapRows(facts []assetOpnameFact) ([]dto.StockOpnameRekapRow, dto.Sto
 	}
 }
 
-func buildCostCenterRows(facts []assetOpnameFact, topN int) []dto.StockOpnameCostCenterRow {
+func buildCostCenterRows(facts []assetOpnameFact, scopedBranches []models.Branch, topN int) []dto.StockOpnameCostCenterRow {
 	type agg struct {
 		branchCode, branchName      string
 		acquisitionValue, bookValue float64
 		unitCount                   int64
 	}
 	byBranch := map[string]*agg{}
+	// Seed dulu dengan semua branch dalam scope supaya branch tanpa asset
+	// (nilai 0) tetap kebawa, bukan cuma branch yang punya asset di facts.
+	for _, b := range scopedBranches {
+		byBranch[b.BranchCode] = &agg{branchCode: b.BranchCode, branchName: b.BranchName}
+	}
 	for _, f := range facts {
 		if f.BranchCode == "" {
 			continue
@@ -622,13 +653,13 @@ func buildCostCenterRows(facts []assetOpnameFact, topN int) []dto.StockOpnameCos
 // ============================================================
 
 func ExportStockOpnameReportExcel(filter dto.StockOpnameExportRequest) (*excelize.File, string, error) {
-	facts, start, end, err := gatherStockOpnameFacts(filter.Month, filter.Year, filter.BranchCode)
+	facts, scopedBranches, start, end, err := gatherStockOpnameFacts(filter.Month, filter.Year, filter.BranchCode)
 	if err != nil {
 		return nil, "", err
 	}
 
-	rekap, areaSummary := buildRekapRows(facts)
-	costCenters := buildCostCenterRows(facts, 10)
+	rekap, areaSummary := buildRekapRows(facts, scopedBranches)
+	costCenters := buildCostCenterRows(facts, scopedBranches, 10)
 
 	f := excelize.NewFile()
 	defer func() {
@@ -648,7 +679,7 @@ func ExportStockOpnameReportExcel(filter dto.StockOpnameExportRequest) (*exceliz
 	writeDetailListSheet(f, "MUTASI", facts, func(x assetOpnameFact) bool {
 		return x.CurrentAssetStatus == models.AssetStatusInMutation
 	})
-	writeNotSubmittedBranchSheet(f, "TDK KIRIM", facts)
+	writeNotSubmittedBranchSheet(f, "TDK KIRIM", facts, scopedBranches)
 	writeUnsupportedSheet(f, "SAP TDK ADA FISIK ADA",
 		"Belum didukung skema saat ini: tidak ada jalur untuk mencatat aset yang ditemukan "+
 			"secara fisik tapi belum terdaftar di sistem (endpoint add-asset stock opname mensyaratkan asset_id yang sudah ada).")
@@ -757,7 +788,7 @@ func writeDetailListSheet(f *excelize.File, sheet string, facts []assetOpnameFac
 	f.SetActiveSheet(index)
 }
 
-func writeNotSubmittedBranchSheet(f *excelize.File, sheet string, facts []assetOpnameFact) {
+func writeNotSubmittedBranchSheet(f *excelize.File, sheet string, facts []assetOpnameFact, scopedBranches []models.Branch) {
 	index, _ := f.NewSheet(sheet)
 	boldStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
 
@@ -766,6 +797,12 @@ func writeNotSubmittedBranchSheet(f *excelize.File, sheet string, facts []assetO
 		totalAsset, opnamedAsset           int64
 	}
 	byBranch := map[string]*agg{}
+	// Seed dulu dengan semua branch dalam scope supaya branch yang belum
+	// (atau tidak punya) asset sama sekali tetap masuk sheet ini dengan
+	// Total Asset = 0, bukan hilang total.
+	for _, b := range scopedBranches {
+		byBranch[b.BranchCode] = &agg{branchCode: b.BranchCode, branchName: b.BranchName, branchType: b.BranchType}
+	}
 	for _, fact := range facts {
 		if fact.BranchCode == "" {
 			continue
