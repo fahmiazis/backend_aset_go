@@ -25,6 +25,14 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 		// GET /transactions/stock-opname/photo/:id/file → serve foto (inline), gak dibatasi stage
 		stockOpname.GET("/photo/:id/file", controllers.ServeStockOpnameAssetPhoto)
 
+		// GET /transactions/stock-opname/documentation/download?transaction_number → download excel dokumentasi
+		// foto bukti fisik (daftar aset + foto per baris) — cuma bisa dipanggil
+		// SETELAH submit (bukan DRAFT lagi), karena baru saat itu foto per aset
+		// dijamin lengkap & tervalidasi (lihat SubmitStockOpname).
+		stockOpname.GET("/documentation/download",
+			middleware.RequirePermission("create_transaction"),
+			controllers.DownloadStockOpnameDocumentation)
+
 		// GET /transactions/stock-opname/borrow-document/:id/file → serve dokumen peminjaman (inline), gak dibatasi stage
 		stockOpname.GET("/borrow-document/:id/file", controllers.ServeStockOpnameBorrowDocument)
 

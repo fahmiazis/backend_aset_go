@@ -4,11 +4,15 @@ import (
 	"backend-go/config"
 	"backend-go/dto"
 	"backend-go/models"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg" // registrasi decoder image/jpeg — dipakai excelize.AddPicture buat baca dimensi foto JPEG
+	"image/png"
 	"io"
 	"mime/multipart"
 	"os"
@@ -18,6 +22,7 @@ import (
 	"time"
 
 	"github.com/xuri/excelize/v2"
+	_ "golang.org/x/image/webp" // registrasi decoder image/webp — dipakai resolveStockOpnamePicturePath
 	"gorm.io/gorm"
 )
 
@@ -872,15 +877,11 @@ func historyItemToRow(i models.StockOpnameItemHistory) stockOpnameItemRow {
 	}
 }
 
-func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDetailResponse, error) {
-	transaction, err := getStockOpnameTransaction(transactionNumber)
-	if err != nil {
-		return nil, err
-	}
-
-	// Item stock opname sekarang tersebar di 3 tabel tergantung stage:
-	// DRAFT -> stock_opname_draft_items, FINISHED -> stock_opname_item_history,
-	// selain itu (APPROVAL/EXECUTE_STOCK_OPNAME/REJECTED) -> transaction_stock_opnames.
+// getStockOpnameItemRows membaca item stock opname dari tabel yang tepat
+// sesuai stage transaksinya (lihat komentar stockOpnameItemRow) — dipakai
+// bareng oleh GetStockOpnameFlowDetail dan GenerateStockOpnameDocumentationExcel
+// biar logic "baca dari tabel yang mana" gak keduplikasi.
+func getStockOpnameItemRows(transaction *models.Transaction) []stockOpnameItemRow {
 	var itemRows []stockOpnameItemRow
 	switch transaction.CurrentStage {
 	case models.StageDraft:
@@ -902,6 +903,19 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 			itemRows = append(itemRows, activeItemToRow(it))
 		}
 	}
+	return itemRows
+}
+
+func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	// Item stock opname sekarang tersebar di 3 tabel tergantung stage:
+	// DRAFT -> stock_opname_draft_items, FINISHED -> stock_opname_item_history,
+	// selain itu (APPROVAL/EXECUTE_STOCK_OPNAME/REJECTED) -> transaction_stock_opnames.
+	itemRows := getStockOpnameItemRows(transaction)
 
 	var stages []models.TransactionStage
 	config.DB.
@@ -1243,6 +1257,186 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 	safeName := strings.NewReplacer("/", "-", " ", "_").Replace(transactionNumber)
 	filename := fmt.Sprintf("stock_opname_template_%s.xlsx", safeName)
 	return f, filename, nil
+}
+
+// ============================================================
+// EXCEL DOKUMENTASI FOTO (download setelah submit)
+//
+// Beda dari template di atas (dipakai buat ISI temuan pas DRAFT), file ini
+// buat bukti dokumentasi fisik ke pihak lain (auditor dst) — daftar aset +
+// foto bukti fisiknya dalam 1 file excel. Cuma bisa diunduh SETELAH submit,
+// karena baru saat itu foto per asset dijamin lengkap & tervalidasi (lihat
+// SubmitStockOpname bagian 7.9 di feature flow doc).
+// ============================================================
+
+const stockOpnameDocumentationSheet = "Dokumentasi"
+
+func GenerateStockOpnameDocumentationExcel(userID, transactionNumber string) (*excelize.File, string, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, "", err
+	}
+	if transaction.CreatedBy != userID {
+		return nil, "", errors.New("you can only download the documentation for your own stock opname")
+	}
+	if transaction.CurrentStage == models.StageDraft {
+		return nil, "", errors.New("dokumentasi baru bisa diunduh setelah stock opname disubmit (foto bukti fisik belum tervalidasi lengkap)")
+	}
+
+	itemRows := getStockOpnameItemRows(transaction)
+
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, "", err
+	}
+	conditionLabel := codeToLabelCondition(conditionMap)
+
+	var photos []models.StockOpnameAssetPhoto
+	config.DB.Where("transaction_id = ?", transaction.ID).Find(&photos)
+	photoByAssetID := make(map[uint]models.StockOpnameAssetPhoto, len(photos))
+	for _, p := range photos {
+		photoByAssetID[p.AssetID] = p
+	}
+
+	// Semua aset di 1 stock opname selalu dari branch yang sama (lihat
+	// bagian 3 di feature flow doc), jadi cukup resolve nama branch sekali
+	// dari aset pertama yang punya branch_code.
+	var branchName string
+	for _, item := range itemRows {
+		if item.Asset != nil && item.Asset.BranchCode != nil && *item.Asset.BranchCode != "" {
+			if b, err := GetBranchByKode(*item.Asset.BranchCode); err == nil {
+				branchName = b.BranchName
+			}
+			break
+		}
+	}
+
+	f := excelize.NewFile()
+	f.SetSheetName("Sheet1", stockOpnameDocumentationSheet)
+
+	titleStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true, Underline: "single", Size: 12}})
+	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}, Border: []excelize.Border{
+		{Type: "top", Color: "000000", Style: 1}, {Type: "bottom", Color: "000000", Style: 1},
+		{Type: "left", Color: "000000", Style: 1}, {Type: "right", Color: "000000", Style: 1},
+	}})
+	cellStyle, _ := f.NewStyle(&excelize.Style{Border: []excelize.Border{
+		{Type: "top", Color: "000000", Style: 1}, {Type: "bottom", Color: "000000", Style: 1},
+		{Type: "left", Color: "000000", Style: 1}, {Type: "right", Color: "000000", Style: 1},
+	}})
+
+	titleCell := fmt.Sprintf("DOKUMENTASI ASSET STOCK OPNAME %s", transactionNumber)
+	f.SetCellValue(stockOpnameDocumentationSheet, "A1", titleCell)
+	f.MergeCell(stockOpnameDocumentationSheet, "A1", "J1")
+	f.SetCellStyle(stockOpnameDocumentationSheet, "A1", "A1", titleStyle)
+
+	headers := []string{"NO", "NO. ASET", "DESKRIPSI", "PLANT", "AREA", "SATUAN", "KONDISI", "LOKASI", "GROUPING", "PICTURE"}
+	headerRow := 3
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, headerRow)
+		f.SetCellValue(stockOpnameDocumentationSheet, cell, h)
+		f.SetCellStyle(stockOpnameDocumentationSheet, cell, cell, headerStyle)
+	}
+
+	colWidths := map[string]float64{
+		"A": 6, "B": 18, "C": 28, "D": 10, "E": 16, "F": 10, "G": 14, "H": 16, "I": 14, "J": 28,
+	}
+	for col, w := range colWidths {
+		f.SetColWidth(stockOpnameDocumentationSheet, col, col, w)
+	}
+
+	const documentationRowHeight = 110.0
+
+	for i, item := range itemRows {
+		row := headerRow + 1 + i
+		f.SetRowHeight(stockOpnameDocumentationSheet, row, documentationRowHeight)
+
+		var assetName, unitOfMeasure, location, grouping, plant string
+		if item.Asset != nil {
+			assetName = item.Asset.AssetName
+			if item.Asset.UnitOfMeasure != nil {
+				unitOfMeasure = *item.Asset.UnitOfMeasure
+			}
+			if item.Asset.Location != nil {
+				location = *item.Asset.Location
+			}
+			if item.Asset.Grouping != nil {
+				grouping = *item.Asset.Grouping
+			}
+			if item.Asset.BranchCode != nil {
+				plant = *item.Asset.BranchCode
+			}
+		}
+
+		values := []interface{}{
+			i + 1, item.AssetNumber, assetName, plant, branchName,
+			unitOfMeasure, conditionLabel[item.Condition], location, grouping,
+		}
+		firstCell, _ := excelize.CoordinatesToCellName(1, row)
+		lastCell, _ := excelize.CoordinatesToCellName(len(headers), row)
+		f.SetCellStyle(stockOpnameDocumentationSheet, firstCell, lastCell, cellStyle)
+		for col, v := range values {
+			cell, _ := excelize.CoordinatesToCellName(col+1, row)
+			f.SetCellValue(stockOpnameDocumentationSheet, cell, v)
+		}
+
+		if photo, ok := photoByAssetID[item.AssetID]; ok {
+			if picturePath, cleanup, err := resolveStockOpnamePicturePath(photo.FilePath); err == nil {
+				pictureCell, _ := excelize.CoordinatesToCellName(len(headers), row)
+				_ = f.AddPicture(stockOpnameDocumentationSheet, pictureCell, picturePath, &excelize.GraphicOptions{
+					AutoFit:         true,
+					LockAspectRatio: true,
+					OffsetX:         4,
+					OffsetY:         4,
+				})
+				if cleanup != nil {
+					cleanup()
+				}
+			}
+		}
+	}
+
+	safeName := strings.NewReplacer("/", "-", " ", "_").Replace(transactionNumber)
+	filename := fmt.Sprintf("stock_opname_dokumentasi_%s.xlsx", safeName)
+	return f, filename, nil
+}
+
+// resolveStockOpnamePicturePath menyiapkan path file gambar yang siap dipakai
+// excelize.AddPicture. Excelize gak dukung embed WEBP langsung (cuma
+// EMF/EMZ/GIF/ICO/JPEG/JPG/PNG/SVG/TIF/TIFF/WMF/WMZ) — padahal foto stock
+// opname boleh diupload dalam format WEBP (lihat UploadStockOpnameAssetPhoto)
+// — jadi buat foto WEBP kita decode lalu re-encode ke PNG sementara di temp
+// dir. Format lain (jpg/jpeg/png) dipakai langsung dari path aslinya, gak
+// ada file sementara yang perlu dibersihkan (cleanup == nil).
+func resolveStockOpnamePicturePath(originalPath string) (path string, cleanup func(), err error) {
+	ext := strings.ToLower(filepath.Ext(originalPath))
+	if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
+		if _, statErr := os.Stat(originalPath); statErr != nil {
+			return "", nil, statErr
+		}
+		return originalPath, nil, nil
+	}
+
+	data, readErr := os.ReadFile(originalPath)
+	if readErr != nil {
+		return "", nil, readErr
+	}
+	img, _, decodeErr := image.Decode(bytes.NewReader(data))
+	if decodeErr != nil {
+		return "", nil, decodeErr
+	}
+
+	tmpFile, tmpErr := os.CreateTemp("", "stock_opname_photo_*.png")
+	if tmpErr != nil {
+		return "", nil, tmpErr
+	}
+	if encodeErr := png.Encode(tmpFile, img); encodeErr != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", nil, encodeErr
+	}
+	tmpFile.Close()
+
+	return tmpFile.Name(), func() { os.Remove(tmpFile.Name()) }, nil
 }
 
 // ============================================================
