@@ -313,6 +313,52 @@ func RejectStockOpname(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Stock opname rejected", result)
 }
 
+func ReviseStockOpnameByApprover(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.ReviseStockOpnameByApproverRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.ReviseStockOpnameByApprover(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname returned to draft for revision", result)
+}
+
+func ReviseStockOpnameByExecutor(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.ReviseStockOpnameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.ReviseStockOpnameByExecutor(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname returned to draft for revision", result)
+}
+
 // ============================================================
 // FOTO BUKTI FISIK PER ASSET
 // ============================================================

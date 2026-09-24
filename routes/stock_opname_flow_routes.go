@@ -104,6 +104,12 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 
 			// GET /transactions/stock-opname/approval/status?transaction_number → status approval
 			stockOpnameApproval.GET("/status", controllers.GetStockOpnameApprovalStatus)
+
+			// POST /transactions/stock-opname/approval/revise?transaction_number → APPROVAL → DRAFT
+			// Aksi approver sejajar approve/reject: tanpa permission menu, otorisasi
+			// lewat transaction_approval_id yang lagi pending (sama kayak
+			// /transaction-approvals/approve|reject).
+			stockOpnameApproval.POST("/revise", controllers.ReviseStockOpnameByApprover)
 		}
 
 		// POST /transactions/stock-opname/execute?transaction_number → EXECUTE_STOCK_OPNAME → FINISHED
@@ -112,7 +118,13 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 			middleware.RequirePermission("execute_stock_opname"),
 			controllers.ExecuteStockOpname)
 
-		// POST /transactions/stock-opname/reject?transaction_number → REJECTED
+		// POST /transactions/stock-opname/execute/revise?transaction_number → EXECUTE_STOCK_OPNAME → DRAFT
+		// Path-nya sengaja di bawah /execute biar ikut menu & permission eksekusi.
+		stockOpname.POST("/execute/revise",
+			middleware.RequirePermission("execute_stock_opname"),
+			controllers.ReviseStockOpnameByExecutor)
+
+		// POST /transactions/stock-opname/reject?transaction_number → REJECTED (final)
 		stockOpname.POST("/reject",
 			middleware.RequirePermission("reject_transaction"),
 			controllers.RejectStockOpname)

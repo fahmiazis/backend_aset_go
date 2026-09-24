@@ -90,6 +90,26 @@ type RejectStockOpnameRequest struct {
 }
 
 // ============================================================
+// REVISI
+// ============================================================
+
+// ReviseStockOpnameRequest dipakai eksekutor (stage EXECUTE_STOCK_OPNAME).
+// AssetIDs = asset yang dichecklist buat direvisi; ReviseAll=true berarti
+// semua asset di transaksi (AssetIDs diabaikan).
+type ReviseStockOpnameRequest struct {
+	AssetIDs      []uint `json:"asset_ids"`
+	ReviseAll     bool   `json:"revise_all"`
+	RevisionNotes string `json:"revision_notes" binding:"required,min=5"`
+}
+
+// ReviseStockOpnameByApproverRequest dipakai approver (stage APPROVAL) —
+// sama kayak approve/reject, harus nyebut step approval yang lagi dipegang.
+type ReviseStockOpnameByApproverRequest struct {
+	TransactionApprovalID string `json:"transaction_approval_id" binding:"required"`
+	ReviseStockOpnameRequest
+}
+
+// ============================================================
 // RESPONSES
 // ============================================================
 
@@ -127,6 +147,10 @@ type StockOpnameFlowItemResponse struct {
 	BorrowDocumentURL      *string `json:"borrow_document_url,omitempty"`
 	BorrowDocumentFileName *string `json:"borrow_document_file_name,omitempty"`
 
+	// NeedsRevision: asset ini dichecklist approver/eksekutor buat direvisi.
+	// Kalau RevisionMode di response detail true, cuma item ini yang boleh diubah.
+	NeedsRevision bool `json:"needs_revision"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -141,6 +165,10 @@ type StockOpnameFlowDetailResponse struct {
 	// enggak (lihat SubmitStockOpname). Cuma penanda kepatuhan jadwal —
 	// tidak pernah memblokir submit.
 	IsSubmissive *bool `json:"is_submissive"`
+
+	// RevisionMode: DRAFT hasil revisi — cuma item dengan needs_revision=true
+	// yang boleh diubah, sisanya dikunci. False = draft biasa, semua bisa diubah.
+	RevisionMode bool `json:"revision_mode"`
 }
 
 // ============================================================

@@ -198,6 +198,10 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 		return nil, err
 	}
 
+	if err := ensureStockOpnameAssetEditable(transaction.ID, req.AssetID); err != nil {
+		return nil, err
+	}
+
 	if physicalMap[req.PhysicalStatus].RequiresBorrowDocument {
 		soCfg, err := getOrCreateStockOpnameConfig()
 		if err != nil {
@@ -259,6 +263,11 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 		byAssetID[item.AssetID] = item
 	}
 
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	var borrowDocAssetIDs []uint
 	config.DB.Model(&models.StockOpnameBorrowDocument{}).
 		Where("transaction_id = ?", transaction.ID).
@@ -292,6 +301,13 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: fmt.Sprintf("asset_id=%d", reqItem.AssetID),
 				Message: "asset not found in this stock opname",
+			})
+			continue
+		}
+
+		if revisionActive && !revisionScope[reqItem.AssetID] {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: current.AssetNumber, Message: errStockOpnameAssetNotInRevision,
 			})
 			continue
 		}
@@ -452,6 +468,11 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, err
 	}
 
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	now := time.Now()
 
 	for _, item := range items {
@@ -467,7 +488,10 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		// lama sebelum di-submit bisa lolos padahal fotonya udah basi. Di sini
 		// dicek ulang relatif ke SAAT SUBMIT, pakai created_at (kapan foto
 		// itu benar-benar sampai ke server), bukan captured_at.
-		if now.Sub(photo.CreatedAt) > stockOpnamePhotoMaxAge {
+		// Asset yang dikunci selama revisi di-skip: fotonya udah lolos di
+		// submit sebelumnya dan creator gak bisa upload ulang.
+		lockedByRevision := revisionActive && !revisionScope[item.AssetID]
+		if !lockedByRevision && now.Sub(photo.CreatedAt) > stockOpnamePhotoMaxAge {
 			return nil, fmt.Errorf(
 				"foto bukti fisik untuk asset %s sudah diupload lebih dari 10 hari sebelum submit (upload: %s) — upload ulang foto yang lebih baru",
 				item.AssetNumber, photo.CreatedAt.Format("02 Jan 2006"),
@@ -501,6 +525,13 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 	if err := tx.Exec(`DELETE FROM stock_opname_draft_items WHERE transaction_id = ?`, transaction.ID).Error; err != nil {
 		tx.Rollback()
 		return nil, fmt.Errorf("failed to clear moved draft items: %w", err)
+	}
+
+	// Putaran revisi selesai begitu di-submit ulang — kunci asset dilepas.
+	if err := tx.Where("transaction_id = ?", transaction.ID).
+		Delete(&models.StockOpnameRevisionAsset{}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
 	}
 
 	// IsSubmissive cuma penanda kepatuhan jadwal (dinilai dari tanggal
@@ -827,6 +858,262 @@ func RejectStockOpname(userID string, transactionNumber string, req dto.RejectSt
 }
 
 // ============================================================
+// AUTO-REJECT APPROVAL
+// Dipanggil dari services/approval_service.go:RejectTransaction setelah
+// approver me-reject salah satu step — pasangan autoCompleteStockOpnameApproval.
+// Tanpa ini transaksi nyangkut di APPROVAL dengan approval berstatus rejected.
+// APPROVAL → REJECTED (final, gak bisa direvisi lagi).
+// ============================================================
+
+func autoRejectStockOpnameApproval(userID, transactionNumber, transactionType, notes string) error {
+	if transactionType != TxStockOpnameFlow {
+		return nil
+	}
+
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	if transaction.CurrentStage != models.StageApproval {
+		return nil
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageRejected); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	reason := "Rejected by approver"
+	if notes != "" {
+		reason = notes
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageRejected,
+		models.ActionReject, userID, nil, &reason); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	MarkTransactionAsExpired(transactionNumber)
+
+	return tx.Commit().Error
+}
+
+// ============================================================
+// REVISI
+// APPROVAL / EXECUTE_STOCK_OPNAME → DRAFT
+// Ditrigger approver (step yang lagi pending) atau eksekutor, bukan creator.
+// Reviser mencentang asset mana yang perlu dibenerin (atau "revisi semua");
+// selama DRAFT revisi cuma asset itu yang boleh diubah creator, sisanya
+// dikunci (lihat ensureStockOpnameAssetEditable). Beda dengan REJECTED yang
+// final.
+// ============================================================
+
+// ReviseStockOpnameByApprover: revisi dari stage APPROVAL, otorisasinya sama
+// persis dengan approve/reject (approver user/role + branch).
+func ReviseStockOpnameByApprover(userID string, transactionNumber string, req dto.ReviseStockOpnameByApproverRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	if transaction.CurrentStage != models.StageApproval {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageApproval)
+	}
+
+	var approval models.TransactionApproval
+	if err := config.DB.
+		Where("id = ? AND transaction_number = ? AND transaction_type = ?", req.TransactionApprovalID, transactionNumber, TxStockOpnameFlow).
+		First(&approval).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("transaction approval not found for this stock opname")
+		}
+		return nil, err
+	}
+	if approval.Status != "pending" {
+		return nil, errors.New("approval already processed")
+	}
+	if approval.ApproverUserID != nil && *approval.ApproverUserID != userID {
+		return nil, errors.New("you are not authorized to revise this transaction")
+	}
+	if approval.ApproverRoleID != nil {
+		var userRole models.UserRole
+		if err := config.DB.
+			Where("user_id = ? AND role_id = ?", userID, *approval.ApproverRoleID).
+			First(&userRole).Error; err != nil {
+			return nil, errors.New("you do not have the required role to revise this transaction")
+		}
+	}
+	if err := validateApproverBranch(userID, transactionNumber, TxStockOpnameFlow); err != nil {
+		return nil, err
+	}
+
+	return reviseStockOpnameToDraft(userID, transaction, req.AssetIDs, req.ReviseAll, req.RevisionNotes)
+}
+
+// ReviseStockOpnameByExecutor: revisi dari stage EXECUTE_STOCK_OPNAME,
+// otorisasinya lewat permission execute_stock_opname di route.
+func ReviseStockOpnameByExecutor(userID string, transactionNumber string, req dto.ReviseStockOpnameRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	if transaction.CurrentStage != models.StageStockOpnameExecute {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageStockOpnameExecute)
+	}
+
+	return reviseStockOpnameToDraft(userID, transaction, req.AssetIDs, req.ReviseAll, req.RevisionNotes)
+}
+
+// reviseStockOpnameToDraft: item dibalikin dari transaction_stock_opnames ke
+// stock_opname_draft_items (kebalikan SubmitStockOpname), asset yang
+// dichecklist dicatat di stock_opname_revision_assets, approval lama
+// di-soft-delete biar di-initiate ulang dari step pertama setelah submit
+// berikutnya. Foto & dokumen peminjaman gak ikut dipindah — dikunci lewat
+// (transaction_id, asset_id), jadi otomatis kebawa lagi ke draft.
+func reviseStockOpnameToDraft(userID string, transaction *models.Transaction, assetIDs []uint, reviseAll bool, notes string) (*dto.StockOpnameFlowDetailResponse, error) {
+	var itemAssetIDs []uint
+	if err := config.DB.Model(&models.TransactionStockOpname{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("asset_id", &itemAssetIDs).Error; err != nil {
+		return nil, err
+	}
+	inTransaction := make(map[uint]bool, len(itemAssetIDs))
+	for _, id := range itemAssetIDs {
+		inTransaction[id] = true
+	}
+
+	revisionAssetIDs := itemAssetIDs
+	if !reviseAll {
+		seen := make(map[uint]bool, len(assetIDs))
+		revisionAssetIDs = make([]uint, 0, len(assetIDs))
+		for _, id := range assetIDs {
+			if !inTransaction[id] {
+				return nil, fmt.Errorf("asset_id %d not found in this stock opname", id)
+			}
+			if !seen[id] {
+				seen[id] = true
+				revisionAssetIDs = append(revisionAssetIDs, id)
+			}
+		}
+	}
+	if len(revisionAssetIDs) == 0 {
+		return nil, errors.New("pilih minimal 1 asset yang perlu direvisi, atau pakai revisi semua")
+	}
+
+	transactionNumber := transaction.TransactionNumber
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := tx.Exec(`
+		INSERT INTO stock_opname_draft_items
+			(transaction_id, transaction_number, asset_id, asset_number, physical_status, `+"`condition`"+`, asset_status, notes, created_at, updated_at)
+		SELECT transaction_id, transaction_number, asset_id, asset_number, physical_status, `+"`condition`"+`, asset_status, notes, created_at, updated_at
+		FROM transaction_stock_opnames
+		WHERE transaction_id = ?
+	`, transaction.ID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to move active items back to draft table: %w", err)
+	}
+	if err := tx.Exec(`DELETE FROM transaction_stock_opnames WHERE transaction_id = ?`, transaction.ID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to clear moved active items: %w", err)
+	}
+
+	// Sisa putaran revisi sebelumnya (harusnya udah kehapus pas submit)
+	if err := tx.Where("transaction_id = ?", transaction.ID).
+		Delete(&models.StockOpnameRevisionAsset{}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	revisionRows := make([]models.StockOpnameRevisionAsset, len(revisionAssetIDs))
+	for i, id := range revisionAssetIDs {
+		revisionRows[i] = models.StockOpnameRevisionAsset{TransactionID: transaction.ID, AssetID: id, CreatedBy: userID}
+	}
+	if err := tx.CreateInBatches(&revisionRows, 500).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// InitiateTransactionApproval nolak kalau masih ada approval (non-deleted)
+	// untuk transaksi ini, jadi approval putaran lama harus dibuang.
+	if err := tx.Where("transaction_number = ? AND transaction_type = ?", transactionNumber, TxStockOpnameFlow).
+		Delete(&models.TransactionApproval{}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Model(&models.ApprovalSignature{}).
+		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, TxStockOpnameFlow).
+		Update("is_recent", false).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageDraft); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageDraft,
+		models.ActionRevise, userID, nil, &notes); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// loadStockOpnameRevisionScope: asset yang boleh diubah selama DRAFT revisi.
+// active=false berarti draft biasa (belum pernah direvisi / udah di-submit
+// ulang) — semua asset boleh diubah.
+func loadStockOpnameRevisionScope(transactionID uint) (scope map[uint]bool, active bool, err error) {
+	var ids []uint
+	if err := config.DB.Model(&models.StockOpnameRevisionAsset{}).
+		Where("transaction_id = ?", transactionID).
+		Pluck("asset_id", &ids).Error; err != nil {
+		return nil, false, err
+	}
+	scope = make(map[uint]bool, len(ids))
+	for _, id := range ids {
+		scope[id] = true
+	}
+	return scope, len(ids) > 0, nil
+}
+
+const errStockOpnameAssetNotInRevision = "asset ini tidak termasuk yang diminta revisi — cuma asset yang dichecklist yang boleh diubah"
+
+func ensureStockOpnameAssetEditable(transactionID, assetID uint) error {
+	scope, active, err := loadStockOpnameRevisionScope(transactionID)
+	if err != nil {
+		return err
+	}
+	if active && !scope[assetID] {
+		return errors.New(errStockOpnameAssetNotInRevision)
+	}
+	return nil
+}
+
+// ============================================================
 // GET DETAIL
 // ============================================================
 
@@ -937,9 +1224,15 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 		borrowDocByAssetID[d.AssetID] = d
 	}
 
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	itemResponses := make([]dto.StockOpnameFlowItemResponse, len(itemRows))
 	for i, item := range itemRows {
 		itemResponses[i] = buildStockOpnameItemResponse(item, photoByAssetID[item.AssetID], borrowDocByAssetID[item.AssetID])
+		itemResponses[i].NeedsRevision = revisionScope[item.AssetID]
 	}
 
 	return &dto.StockOpnameFlowDetailResponse{
@@ -947,6 +1240,7 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 		Items:        itemResponses,
 		Stages:       mapTransactionStagesToResponse(stages),
 		IsSubmissive: transaction.IsSubmissive,
+		RevisionMode: revisionActive,
 	}, nil
 }
 
@@ -1189,6 +1483,22 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 		Order("asset_number ASC").
 		Find(&items).Error; err != nil {
 		return nil, "", err
+	}
+
+	// Selama DRAFT revisi, template cuma berisi asset yang dichecklist —
+	// asset lain dikunci, jadi gak ada gunanya ikut diisi.
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	if revisionActive {
+		editable := items[:0]
+		for _, item := range items {
+			if revisionScope[item.AssetID] {
+				editable = append(editable, item)
+			}
+		}
+		items = editable
 	}
 
 	physicalMap, err := loadStockOpnamePhysicalStatusMap()
@@ -1486,6 +1796,11 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 		itemByAssetNumber[item.AssetNumber] = item
 	}
 
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	var borrowDocAssetIDs []uint
 	config.DB.Model(&models.StockOpnameBorrowDocument{}).
 		Where("transaction_id = ?", transaction.ID).
@@ -1529,6 +1844,13 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
 				Message: "asset tidak ditemukan di stock opname ini",
+			})
+			continue
+		}
+
+		if revisionActive && !revisionScope[item.AssetID] {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber, Message: errStockOpnameAssetNotInRevision,
 			})
 			continue
 		}
@@ -1681,6 +2003,10 @@ func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetI
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("asset not found in this stock opname")
 		}
+		return nil, err
+	}
+
+	if err := ensureStockOpnameAssetEditable(transaction.ID, assetID); err != nil {
 		return nil, err
 	}
 
@@ -1842,6 +2168,10 @@ func UploadStockOpnameBorrowDocument(userID string, transactionNumber string, as
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("asset not found in this stock opname")
 		}
+		return nil, err
+	}
+
+	if err := ensureStockOpnameAssetEditable(transaction.ID, assetID); err != nil {
 		return nil, err
 	}
 

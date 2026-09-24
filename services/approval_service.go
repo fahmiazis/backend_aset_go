@@ -626,9 +626,20 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 		return err
 	}
 
+	// Notes opsional — jangan deref langsung, bisa nil
+	rejectNotes := ""
+	if req.Notes != nil {
+		rejectNotes = *req.Notes
+	}
+
 	// Auto-reject transaksi jika approval di-reject
-	if err := autoRejectTransaction(userID, approval.TransactionNumber, approval.TransactionType, *req.Notes); err != nil {
+	if err := autoRejectTransaction(userID, approval.TransactionNumber, approval.TransactionType, rejectNotes); err != nil {
 		fmt.Printf("auto reject transaction warning: %v\n", err)
+	}
+
+	// Auto-reject untuk stock opname
+	if err := autoRejectStockOpnameApproval(userID, approval.TransactionNumber, approval.TransactionType, rejectNotes); err != nil {
+		fmt.Printf("auto reject stock opname approval warning: %v\n", err)
 	}
 
 	return nil
