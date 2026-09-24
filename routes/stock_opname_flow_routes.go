@@ -42,13 +42,16 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 		stockOpname.PUT("/config", controllers.UpdateStockOpnameConfig)
 
 		// Master data status fisik & kondisi — CREATE + LIST + soft DELETE saja
-		// (tidak ada UPDATE, lihat dto/stock_opname_status_master_dto.go).
+		// (tidak ada UPDATE, lihat dto/stock_opname_status_master_dto.go),
+		// kecuali relasi status fisik -> kondisi yang boleh diatur ulang.
 		// Sama seperti /config: belum ada pembatasan role/permission (nyusul).
 		statusMaster := stockOpname.Group("/status-master")
 		{
 			statusMaster.GET("/physical-status", controllers.GetAllStockOpnamePhysicalStatusMasters)
 			statusMaster.POST("/physical-status", controllers.CreateStockOpnamePhysicalStatusMaster)
 			statusMaster.DELETE("/physical-status/:id", controllers.DeleteStockOpnamePhysicalStatusMaster)
+			// PUT .../physical-status/:id/conditions → atur kondisi yang boleh dipilih buat status fisik ini
+			statusMaster.PUT("/physical-status/:id/conditions", controllers.UpdateStockOpnamePhysicalStatusConditions)
 
 			statusMaster.GET("/condition", controllers.GetAllStockOpnameConditionMasters)
 			statusMaster.POST("/condition", controllers.CreateStockOpnameConditionMaster)

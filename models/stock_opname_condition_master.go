@@ -14,10 +14,8 @@ type StockOpnameConditionMaster struct {
 	Code  string `gorm:"size:50;uniqueIndex;not null" json:"code"`
 	Label string `gorm:"size:100;not null" json:"label"`
 
-	// IsNotApplicableValue: menandai kondisi ini sebagai representasi
-	// "Tidak Ada"/N.A (dulu hardcode "NOT_APPLICABLE") — dipakai validasi
-	// silang terhadap StockOpnamePhysicalStatusMaster.RequiresNotApplicableCondition.
-	IsNotApplicableValue bool `gorm:"not null;default:false" json:"is_not_applicable_value"`
+	// Status fisik mana yang boleh pakai kondisi ini diatur lewat
+	// StockOpnamePhysicalConditionRule.
 
 	// ReportBucket: "BAIK" | "RUSAK" | "" (kosong = tidak dihitung di bucket
 	// manapun, dulu berlaku utk NOT_APPLICABLE). Dipakai laporan stock opname.

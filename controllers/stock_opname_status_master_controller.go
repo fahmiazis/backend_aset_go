@@ -35,6 +35,21 @@ func CreateStockOpnamePhysicalStatusMaster(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusCreated, "Stock opname physical status master created successfully", row)
 }
 
+func UpdateStockOpnamePhysicalStatusConditions(c *gin.Context) {
+	var req dto.UpdateStockOpnamePhysicalStatusConditionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	row, err := services.UpdateStockOpnamePhysicalStatusConditions(c.Param("id"), req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname physical status conditions updated successfully", row)
+}
+
 func DeleteStockOpnamePhysicalStatusMaster(c *gin.Context) {
 	id := c.Param("id")
 	if err := services.DeleteStockOpnamePhysicalStatusMaster(id); err != nil {

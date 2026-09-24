@@ -134,15 +134,14 @@ func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest
 
 // validateFindingPhysicalConditionPair memvalidasi bahwa physicalStatus &
 // condition beneran ada di master data (bukan hardcode lagi, lihat
-// services/stock_opname_status_master_service.go) DAN mencegah kombinasi
-// yang gak mungkin terjadi: kalau physicalStatus.RequiresNotApplicableCondition
-// true (dulu hardcode "MISSING"/"BORROWED"), condition WAJIB salah satu yang
-// IsNotApplicableValue — dan sebaliknya kalau false (dulu "EXISTS"), condition
-// JUSTRU DILARANG pakai nilai IsNotApplicableValue karena harus benar-benar
-// dinilai.
+// services/stock_opname_status_master_service.go) DAN kombinasinya diizinkan
+// oleh relasi status fisik -> kondisi (rules, dari
+// loadStockOpnameConditionRules) — misal "Tidak Ada" gak bisa berkondisi
+// "Baik". Relasinya diatur di master data, bukan hardcode.
 func validateFindingPhysicalConditionPair(
 	physicalMap map[string]models.StockOpnamePhysicalStatusMaster,
 	conditionMap map[string]models.StockOpnameConditionMaster,
+	rules map[string]map[string]bool,
 	physicalStatus, condition string,
 ) error {
 	pm, ok := physicalMap[physicalStatus]
@@ -153,11 +152,8 @@ func validateFindingPhysicalConditionPair(
 	if !ok {
 		return fmt.Errorf("condition tidak valid: %q", condition)
 	}
-	if pm.RequiresNotApplicableCondition && !cm.IsNotApplicableValue {
-		return fmt.Errorf("condition must be a not-applicable value when physical_status is %s", physicalStatus)
-	}
-	if !pm.RequiresNotApplicableCondition && cm.IsNotApplicableValue {
-		return fmt.Errorf("condition cannot be a not-applicable value when physical_status is %s", physicalStatus)
+	if !rules[physicalStatus][condition] {
+		return fmt.Errorf("kondisi %q tidak diizinkan untuk status fisik %q — atur di master data status", cm.Label, pm.Label)
 	}
 	return nil
 }
@@ -184,7 +180,11 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 	if err != nil {
 		return nil, err
 	}
-	if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, req.PhysicalStatus, req.Condition); err != nil {
+	conditionRules, err := loadStockOpnameConditionRules()
+	if err != nil {
+		return nil, err
+	}
+	if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, conditionRules, req.PhysicalStatus, req.Condition); err != nil {
 		return nil, err
 	}
 
@@ -290,6 +290,10 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 	if err != nil {
 		return nil, err
 	}
+	conditionRules, err := loadStockOpnameConditionRules()
+	if err != nil {
+		return nil, err
+	}
 
 	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
 
@@ -356,7 +360,7 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 		// masih kosong berarti user masih di tengah proses ngisi cell lain,
 		// belum saatnya divalidasi silang.
 		if effectivePhysical != "" && effectiveCondition != "" {
-			if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, effectivePhysical, effectiveCondition); err != nil {
+			if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, conditionRules, effectivePhysical, effectiveCondition); err != nil {
 				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 					Row: rowNum, AssetNumber: current.AssetNumber, Message: err.Error(),
 				})
@@ -1823,6 +1827,10 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 	if err != nil {
 		return nil, err
 	}
+	conditionRules, err := loadStockOpnameConditionRules()
+	if err != nil {
+		return nil, err
+	}
 	physicalStatusValue := labelToCodePhysicalStatus(physicalMap)
 	conditionValue := labelToCodeCondition(conditionMap)
 
@@ -1880,7 +1888,7 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 			continue
 		}
 
-		if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, physicalStatus, condition); err != nil {
+		if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, conditionRules, physicalStatus, condition); err != nil {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
 				Message: err.Error(),

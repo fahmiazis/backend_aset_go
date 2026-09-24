@@ -20,9 +20,9 @@ type CreateStockOpnameDraftRequest struct {
 // models.StockOpnamePhysicalStatusMaster / StockOpnameConditionMaster,
 // bisa ditambah lewat /transactions/stock-opname/status-master/*) — jadi
 // TIDAK ada lagi binding:"oneof=..." statis di sini, validitas kode +
-// aturan silangnya (mis. status yang RequiresNotApplicableCondition wajib
-// pasangan condition yang IsNotApplicableValue) dicek di service terhadap
-// data master saat itu. Khusus status yang RequiresBorrowDocument (dulu
+// aturan silangnya (kondisi mana yang boleh buat status fisik mana, lihat
+// models.StockOpnamePhysicalConditionRule) dicek di service terhadap data
+// master saat itu. Khusus status yang RequiresBorrowDocument (dulu
 // cuma "BORROWED"), dokumen peminjaman (PDF) wajib sudah diupload lebih
 // dulu lewat endpoint upload terpisah — juga divalidasi di service.
 // ============================================================
