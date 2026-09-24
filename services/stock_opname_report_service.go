@@ -42,6 +42,9 @@ type assetOpnameFact struct {
 
 	HasOpnameThisPeriod bool
 	OpnameStage         string
+	// OpnameRevised: transaksinya pernah dibalikin ke DRAFT lewat
+	// ReviseStockOpname dan sekarang lagi di DRAFT (belum di-submit ulang).
+	OpnameRevised       bool
 	TransactionNumber   string
 	FoundPhysicalStatus string
 	FoundCondition      string
@@ -61,6 +64,7 @@ const (
 	statusBucketInProgress  = "in_progress"
 	statusBucketBelumSubmit = "belum_submit"
 	statusBucketRejected    = "rejected"
+	statusBucketRevisi      = "revisi"
 	statusBucketDisposal    = "disposal"
 )
 
@@ -68,9 +72,8 @@ func (f assetOpnameFact) isDisposed() bool {
 	return f.CurrentAssetStatus == models.AssetStatusDisposed || f.CurrentAssetStatus == models.AssetStatusInDisposal
 }
 
-// statusBucket menentukan bucket Finish/InProgress/BelumSubmit/Rejected/Disposal
-// untuk satu asset. "Revisi" sengaja tidak muncul di sini — lihat catatan di
-// dto.StockOpnameStatusBreakdown.
+// statusBucket menentukan bucket Finish/InProgress/BelumSubmit/Rejected/Revisi/Disposal
+// untuk satu asset.
 func (f assetOpnameFact) statusBucket() string {
 	if f.isDisposed() {
 		return statusBucketDisposal
@@ -83,6 +86,11 @@ func (f assetOpnameFact) statusBucket() string {
 		return statusBucketFinish
 	case models.StageRejected:
 		return statusBucketRejected
+	case models.StageDraft:
+		if f.OpnameRevised {
+			return statusBucketRevisi
+		}
+		return statusBucketInProgress
 	default: // DRAFT, APPROVAL, EXECUTE_STOCK_OPNAME
 		return statusBucketInProgress
 	}
@@ -98,6 +106,8 @@ func addToBreakdown(b *dto.StockOpnameStatusBreakdown, bucket string) {
 		b.BelumSubmit++
 	case statusBucketRejected:
 		b.Rejected++
+	case statusBucketRevisi:
+		b.Revisi++
 	case statusBucketDisposal:
 		b.Disposal++
 	}
@@ -231,6 +241,20 @@ func gatherStockOpnameFacts(month, year int, branchCode string) (facts []assetOp
 		return nil, nil, start, end, fmt.Errorf("failed to load stock opname items: %w", err)
 	}
 
+	// Transaksi yang lagi di DRAFT hasil revisi (pernah ada stage REVISE).
+	var revisedTxIDs []uint
+	if err := config.DB.Model(&models.TransactionStage{}).
+		Joins("JOIN transactions t ON t.id = transaction_stages.transaction_id").
+		Where("transaction_stages.action = ? AND t.transaction_type = ? AND t.current_stage = ?",
+			models.ActionRevise, TxStockOpnameFlow, models.StageDraft).
+		Distinct().Pluck("transaction_stages.transaction_id", &revisedTxIDs).Error; err != nil {
+		return nil, nil, start, end, fmt.Errorf("failed to load revised stock opnames: %w", err)
+	}
+	revisedTx := make(map[uint]bool, len(revisedTxIDs))
+	for _, id := range revisedTxIDs {
+		revisedTx[id] = true
+	}
+
 	// Map keyed by asset_id; karena di-order ASC, penulisan terakhir yang
 	// menang = temuan paling baru untuk asset itu di periode ini.
 	itemByAsset := make(map[uint]itemRow, len(items))
@@ -271,6 +295,7 @@ func gatherStockOpnameFacts(month, year int, branchCode string) (facts []assetOp
 		if it, ok := itemByAsset[a.ID]; ok {
 			f.HasOpnameThisPeriod = true
 			f.OpnameStage = it.CurrentStage
+			f.OpnameRevised = revisedTx[it.TransactionID]
 			f.TransactionNumber = it.TransactionNumber
 			f.FoundPhysicalStatus = it.PhysicalStatus
 			f.FoundCondition = it.Condition
