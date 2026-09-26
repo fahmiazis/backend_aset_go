@@ -102,3 +102,29 @@ func GetDisposalAgreementApprovalStatus(c *gin.Context) {
 
 	utils.SuccessResponse(c, http.StatusOK, "Approval status retrieved successfully", result)
 }
+
+// ReviseDisposalAgreement - POST /transactions/disposal-agreements/revise?agreement_number=
+//
+// Mengeluarkan disposal anggota yang bermasalah dari agreement dan
+// mengembalikannya ke DRAFT. Sisa anggota tetap di agreement.
+func ReviseDisposalAgreement(c *gin.Context) {
+	agreementNumber := c.Query("agreement_number")
+	if agreementNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "agreement_number is required")
+		return
+	}
+
+	var req dto.ReviseDisposalAgreementRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.ReviseDisposalAgreement(c.GetString("user_id"), agreementNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Disposal returned for revision", result)
+}

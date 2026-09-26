@@ -27,5 +27,11 @@ func SetupDisposalAgreementRoutes(rg *gin.RouterGroup) {
 		agreements.POST("",
 			middleware.RequirePermission("manage_disposal_agreement"),
 			controllers.CreateDisposalAgreement)
+
+		// Revisi oleh approver step berjalan. Tanpa RequirePermission,
+		// mengikuti revisi disposal/procurement/mutasi: otorisasinya melekat
+		// pada agreement ("apakah kamu approver step ini") dan diperiksa di
+		// service.
+		agreements.POST("/revise", controllers.ReviseDisposalAgreement)
 	}
 }

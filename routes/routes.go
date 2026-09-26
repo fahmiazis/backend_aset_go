@@ -31,6 +31,7 @@ func SetupRoutes(r *gin.Engine) {
 		SetupMutationFlowRoutes(v1)
 		SetupDisposalFlowRoutes(v1)
 		SetupDisposalAgreementRoutes(v1)
+		SetupEmailRoutes(v1)
 	}
 
 	// Health check endpoint (no auth required)

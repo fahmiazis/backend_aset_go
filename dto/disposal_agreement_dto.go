@@ -66,3 +66,10 @@ type DisposalAgreementListFilter struct {
 	Page      int     `form:"page"`
 	Limit     int     `form:"limit"`
 }
+
+// ReviseDisposalAgreementRequest — approver step berjalan mengeluarkan
+// disposal anggota yang bermasalah; disposal itu kembali ke DRAFT miliknya.
+type ReviseDisposalAgreementRequest struct {
+	RevisionNotes      string   `json:"revision_notes" binding:"required,min=5"`
+	TransactionNumbers []string `json:"transaction_numbers" binding:"required,min=1"`
+}
