@@ -765,6 +765,11 @@ func ApproveTransaction(userID string, req dto.ApproveTransactionRequest) error 
 	// APPROVAL_REQUEST walau semua step sudah approved.
 	runPostApprovalHooks(userID, approval.TransactionNumber, approval.TransactionType)
 
+	// Auto-trigger untuk stock opname
+	if err := autoCompleteStockOpnameApproval(userID, approval.TransactionNumber, approval.TransactionType); err != nil {
+		fmt.Printf("auto complete stock opname approval warning: %v\n", err)
+	}
+
 	return nil
 }
 

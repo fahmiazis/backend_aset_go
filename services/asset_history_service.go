@@ -66,6 +66,9 @@ func GetAllAssetHistories(filter dto.AssetHistoryFilter) ([]dto.AssetHistoryResp
 	return mapAssetHistoriesToResponse(histories), total, nil
 }
 
-func CreateAssetHistory(history models.AssetHistory) error {
-	return config.DB.Create(&history).Error
+// CreateAssetHistory inserts an audit row. Accepts an explicit *gorm.DB so
+// callers running inside a transaction (e.g. stock opname execute) can keep
+// the write atomic with their other changes; pass config.DB otherwise.
+func CreateAssetHistory(db *gorm.DB, history models.AssetHistory) error {
+	return db.Create(&history).Error
 }

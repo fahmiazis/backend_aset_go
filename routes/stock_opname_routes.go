@@ -8,7 +8,7 @@ import (
 )
 
 func SetupStockOpnameRoutes(rg *gin.RouterGroup) {
-	stockOpname := rg.Group("/transactions/stock-opname")
+	stockOpname := rg.Group("/transactions/stock-opname/old")
 	stockOpname.Use(middleware.AuthMiddleware())
 	{
 		stockOpname.POST("",

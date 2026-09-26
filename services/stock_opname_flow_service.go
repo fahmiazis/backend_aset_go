@@ -1,0 +1,1609 @@
+package services
+
+import (
+	"backend-go/config"
+	"backend-go/dto"
+	"backend-go/models"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/xuri/excelize/v2"
+	"gorm.io/gorm"
+)
+
+// TxStockOpnameFlow adalah transaction_type yang sama dipakai oleh CRUD lama
+// (services/stock_opname_service.go) — flow baru ini menggantikannya, bukan
+// menambah tipe baru.
+const TxStockOpnameFlow = "stock_opname"
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+func getStockOpnameTransaction(transactionNumber string) (*models.Transaction, error) {
+	var transaction models.Transaction
+	if err := config.DB.
+		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, TxStockOpnameFlow).
+		First(&transaction).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("stock opname transaction not found")
+		}
+		return nil, err
+	}
+	return &transaction, nil
+}
+
+// ============================================================
+// CREATE DRAFT
+// ============================================================
+
+// CreateStockOpnameDraft bikin draft baru dan langsung mengisi semua asset
+// yang ada di branch homebase aktif si pembuat (1 user = 1 homebase aktif).
+// Tidak ada lagi add/remove asset manual — daftar asset adalah snapshot
+// kondisi branch pada saat draft dibuat.
+func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	now := time.Now()
+	transactionDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	branchCode, err := GetUserActiveBranchCode(userID)
+	if err != nil {
+		return nil, errors.New("anda belum memiliki homebase aktif, silakan set homebase terlebih dahulu")
+	}
+
+	var branchAssets []models.Asset
+	if err := config.DB.
+		Where("branch_code = ? AND deleted_at IS NULL AND asset_status != ?", branchCode, models.AssetStatusDisposed).
+		Find(&branchAssets).Error; err != nil {
+		return nil, err
+	}
+
+	if len(branchAssets) == 0 {
+		return nil, fmt.Errorf("branch %s belum memiliki asset terdaftar, tidak bisa membuat stock opname", branchCode)
+	}
+
+	// Gak ada lagi pengecualian "asset lagi kepake stock opname lain yang
+	// masih berjalan" — user yang sama boleh bikin stock opname baru kapan
+	// aja, termasuk hari yang sama & overlap asset dengan stock opname lain
+	// yang belum selesai. Tiap stock opname independen satu sama lain.
+	transactionNumber, err := GenerateTransactionNumber(userID, TxStockOpnameFlow)
+	if err != nil {
+		return nil, err
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	transaction := models.Transaction{
+		TransactionNumber: transactionNumber,
+		TransactionType:   TxStockOpnameFlow,
+		TransactionDate:   transactionDate,
+		Status:            models.TransactionStatusDraft,
+		CurrentStage:      models.StageDraft,
+		Notes:             req.Notes,
+		CreatedBy:         userID,
+	}
+
+	if err := tx.Create(&transaction).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	for _, asset := range branchAssets {
+		item := models.StockOpnameDraftItem{
+			TransactionID:     transaction.ID,
+			TransactionNumber: transactionNumber,
+			AssetID:           asset.ID,
+			AssetNumber:       asset.AssetNumber,
+			AssetStatus:       asset.AssetStatus, // default awal, diedit lewat UpdateStockOpnameFinding
+		}
+		if err := tx.Create(&item).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to add asset %s to draft: %w", asset.AssetNumber, err)
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// ============================================================
+// INPUT / UPDATE TEMUAN FISIK (masih DRAFT)
+// ============================================================
+
+// validateFindingPhysicalConditionPair mencegah kombinasi yang gak mungkin
+// terjadi: kalau fisik aset gak ada di lokasi (MISSING "Tidak Ada" atau
+// BORROWED "Dipinjam"), kondisinya wajib "Tidak Ada" (NOT_APPLICABLE) —
+// dan sebaliknya, kalau fisiknya "Ada" (EXISTS), kondisinya gak boleh
+// NOT_APPLICABLE karena harus dinilai.
+func validateFindingPhysicalConditionPair(physicalStatus, condition string) error {
+	if (physicalStatus == "MISSING" || physicalStatus == "BORROWED") && condition != "NOT_APPLICABLE" {
+		return fmt.Errorf("condition must be NOT_APPLICABLE when physical_status is %s", physicalStatus)
+	}
+	if physicalStatus == "EXISTS" && condition == "NOT_APPLICABLE" {
+		return errors.New("condition cannot be NOT_APPLICABLE when physical_status is EXISTS")
+	}
+	return nil
+}
+
+func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.UpdateStockOpnameFindingRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only update findings on DRAFT stock opnames")
+	}
+
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	if err := validateFindingPhysicalConditionPair(req.PhysicalStatus, req.Condition); err != nil {
+		return nil, err
+	}
+
+	var item models.StockOpnameDraftItem
+	if err := config.DB.
+		Where("transaction_id = ? AND asset_id = ?", transaction.ID, req.AssetID).
+		First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("asset not found in this stock opname")
+		}
+		return nil, err
+	}
+
+	if req.PhysicalStatus == "BORROWED" {
+		soCfg, err := getOrCreateStockOpnameConfig()
+		if err != nil {
+			return nil, err
+		}
+		if soCfg.BorrowDocIsRequired {
+			var docCount int64
+			config.DB.Model(&models.StockOpnameBorrowDocument{}).
+				Where("transaction_id = ? AND asset_id = ?", transaction.ID, req.AssetID).
+				Count(&docCount)
+			if docCount == 0 {
+				return nil, errors.New("dokumen peminjaman wajib diupload dulu sebelum menyimpan status Dipinjam")
+			}
+		}
+	}
+
+	assetStatus := item.AssetStatus
+	if req.AssetStatus != nil {
+		assetStatus = *req.AssetStatus
+	}
+
+	if err := config.DB.Model(&item).Updates(map[string]interface{}{
+		"physical_status": req.PhysicalStatus,
+		"condition":       req.Condition,
+		"asset_status":    assetStatus,
+		"notes":           req.Notes,
+	}).Error; err != nil {
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// BulkUpdateStockOpnameFinding dipakai autosave grid "Lengkapi Data" —
+// menyimpan banyak asset sekaligus dalam satu request (biasanya dipanggil
+// tiap beberapa detik dari FE, bukan tiap keystroke). Partial update per
+// item, sama semantiknya kayak upload excel: baris valid tetap kesimpen,
+// baris invalid dikumpulkan sebagai error report tanpa gagalin baris lain.
+func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req dto.BulkUpdateStockOpnameFindingRequest) (*dto.StockOpnameTemplateUploadResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only update findings on DRAFT stock opnames")
+	}
+
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	var existing []models.StockOpnameDraftItem
+	if err := config.DB.Where("transaction_id = ?", transaction.ID).Find(&existing).Error; err != nil {
+		return nil, err
+	}
+	byAssetID := make(map[uint]models.StockOpnameDraftItem, len(existing))
+	for _, item := range existing {
+		byAssetID[item.AssetID] = item
+	}
+
+	var borrowDocAssetIDs []uint
+	config.DB.Model(&models.StockOpnameBorrowDocument{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("asset_id", &borrowDocAssetIDs)
+	hasBorrowDoc := make(map[uint]bool, len(borrowDocAssetIDs))
+	for _, id := range borrowDocAssetIDs {
+		hasBorrowDoc[id] = true
+	}
+
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
+
+	for i, reqItem := range req.Items {
+		rowNum := i + 1
+
+		current, ok := byAssetID[reqItem.AssetID]
+		if !ok {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: fmt.Sprintf("asset_id=%d", reqItem.AssetID),
+				Message: "asset not found in this stock opname",
+			})
+			continue
+		}
+
+		// Value non-empty tapi gak dikenal enum-nya ditolak; string kosong
+		// selalu diloloskan di sini (representasi "field sengaja dikosongkan
+		// lagi" saat user ganti pilihan) — lihat komentar di dto.
+		if reqItem.PhysicalStatus != nil && *reqItem.PhysicalStatus != "" {
+			if _, ok := stockOpnamePhysicalStatusLabel[*reqItem.PhysicalStatus]; !ok {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: current.AssetNumber,
+					Message: fmt.Sprintf("status fisik tidak valid: %q", *reqItem.PhysicalStatus),
+				})
+				continue
+			}
+		}
+		if reqItem.Condition != nil && *reqItem.Condition != "" {
+			if _, ok := stockOpnameConditionLabel[*reqItem.Condition]; !ok {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: current.AssetNumber,
+					Message: fmt.Sprintf("kondisi tidak valid: %q", *reqItem.Condition),
+				})
+				continue
+			}
+		}
+		if reqItem.AssetStatus != nil && *reqItem.AssetStatus != "" {
+			if _, ok := stockOpnameAssetStatusLabel[*reqItem.AssetStatus]; !ok {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: current.AssetNumber,
+					Message: fmt.Sprintf("status aset tidak valid: %q", *reqItem.AssetStatus),
+				})
+				continue
+			}
+		}
+
+		effectivePhysical := current.PhysicalStatus
+		if reqItem.PhysicalStatus != nil {
+			effectivePhysical = *reqItem.PhysicalStatus
+		}
+		effectiveCondition := current.Condition
+		if reqItem.Condition != nil {
+			effectiveCondition = *reqItem.Condition
+		}
+
+		// Cuma divalidasi kalau dua-duanya udah keisi — kalau salah satu
+		// masih kosong berarti user masih di tengah proses ngisi cell lain,
+		// belum saatnya divalidasi silang.
+		if effectivePhysical != "" && effectiveCondition != "" {
+			if err := validateFindingPhysicalConditionPair(effectivePhysical, effectiveCondition); err != nil {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: current.AssetNumber, Message: err.Error(),
+				})
+				continue
+			}
+		}
+
+		if effectivePhysical == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[current.AssetID] {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: current.AssetNumber,
+				Message: "dokumen peminjaman wajib diupload dulu sebelum menyimpan status Dipinjam",
+			})
+			continue
+		}
+
+		updates := map[string]interface{}{}
+		if reqItem.PhysicalStatus != nil {
+			updates["physical_status"] = *reqItem.PhysicalStatus
+		}
+		if reqItem.Condition != nil {
+			updates["condition"] = *reqItem.Condition
+		}
+		if reqItem.AssetStatus != nil {
+			updates["asset_status"] = *reqItem.AssetStatus
+		}
+		if reqItem.Notes != nil {
+			updates["notes"] = *reqItem.Notes
+		}
+
+		if len(updates) == 0 {
+			continue
+		}
+
+		if err := config.DB.Model(&models.StockOpnameDraftItem{}).
+			Where("id = ?", current.ID).
+			Updates(updates).Error; err != nil {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: current.AssetNumber, Message: "gagal menyimpan: " + err.Error(),
+			})
+			continue
+		}
+
+		response.UpdatedCount++
+	}
+
+	response.FailedCount = len(response.Errors)
+
+	detail, err := GetStockOpnameFlowDetail(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	response.Detail = detail
+
+	return response, nil
+}
+
+// ============================================================
+// SUBMIT
+// DRAFT → APPROVAL
+// ============================================================
+
+func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitStockOpnameRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only submit your own stock opname")
+	}
+
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageDraft)
+	}
+
+	var items []models.StockOpnameDraftItem
+	if err := config.DB.Where("transaction_id = ?", transaction.ID).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, errors.New("cannot submit stock opname with no assets")
+	}
+
+	var photoAssetIDs []uint
+	config.DB.Model(&models.StockOpnameAssetPhoto{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("asset_id", &photoAssetIDs)
+	hasPhoto := make(map[uint]bool, len(photoAssetIDs))
+	for _, id := range photoAssetIDs {
+		hasPhoto[id] = true
+	}
+
+	var borrowDocAssetIDs []uint
+	config.DB.Model(&models.StockOpnameBorrowDocument{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("asset_id", &borrowDocAssetIDs)
+	hasBorrowDoc := make(map[uint]bool, len(borrowDocAssetIDs))
+	for _, id := range borrowDocAssetIDs {
+		hasBorrowDoc[id] = true
+	}
+
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, item := range items {
+		if item.PhysicalStatus == "" || item.Condition == "" {
+			return nil, fmt.Errorf("finding not yet filled for asset %s", item.AssetNumber)
+		}
+		if !hasPhoto[item.AssetID] {
+			return nil, fmt.Errorf("foto bukti fisik belum dilampirkan untuk asset %s", item.AssetNumber)
+		}
+		if item.PhysicalStatus == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
+			return nil, fmt.Errorf("dokumen peminjaman belum dilampirkan untuk asset %s", item.AssetNumber)
+		}
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Pindahkan item dari "draft" ke "aktif" (transaction_stock_opnames) —
+	// insert-select (tanpa kolom id, biar dapet id baru di tabel tujuan)
+	// lalu delete dari tabel asal, dua-duanya dalam tx yang sama biar atomik.
+	if err := tx.Exec(`
+		INSERT INTO transaction_stock_opnames
+			(transaction_id, transaction_number, asset_id, asset_number, physical_status, `+"`condition`"+`, asset_status, notes, created_at, updated_at)
+		SELECT transaction_id, transaction_number, asset_id, asset_number, physical_status, `+"`condition`"+`, asset_status, notes, created_at, updated_at
+		FROM stock_opname_draft_items
+		WHERE transaction_id = ?
+	`, transaction.ID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to move draft items to active table: %w", err)
+	}
+	if err := tx.Exec(`DELETE FROM stock_opname_draft_items WHERE transaction_id = ?`, transaction.ID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to clear moved draft items: %w", err)
+	}
+
+	// IsSubmissive cuma penanda kepatuhan jadwal (dinilai dari tanggal
+	// SUBMIT, bukan tanggal draft dibuat) — gak pernah menghalangi submit
+	// itu sendiri, submit di luar jendela tetap jalan seperti biasa.
+	isSubmissive := isWithinSubmissionWindow(time.Now(), soCfg.SubmissionStartDay, soCfg.SubmissionEndDay)
+	if err := tx.Model(transaction).Update("is_submissive", isSubmissive).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageApproval); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageApproval,
+		models.ActionSubmit, userID, nil, req.Notes); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// ============================================================
+// INITIATE APPROVAL
+// ============================================================
+
+func InitiateStockOpnameApproval(userID string, transactionNumber string, req dto.InitiateApprovalRequest) error {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	if transaction.CurrentStage != models.StageApproval {
+		return fmt.Errorf("transaction is not in %s stage", models.StageApproval)
+	}
+
+	creatorHomebase, homebaseErr := GetUserActiveHomebase(transaction.CreatedBy)
+	branchCode := "ALL"
+	if homebaseErr == nil {
+		branchCode = creatorHomebase.Branch.BranchCode
+	}
+
+	flow, err := GetApprovalFlowByCodeAndBranch(models.FlowStockOpnameApproval, branchCode)
+	if err != nil {
+		return fmt.Errorf("approval flow %s not found for branch %s or ALL", models.FlowStockOpnameApproval, branchCode)
+	}
+
+	if !flow.IsActive {
+		return fmt.Errorf("approval flow %s is inactive", models.FlowStockOpnameApproval)
+	}
+
+	approvalReq := dto.CreateTransactionApprovalRequest{
+		FlowID:            flow.ID,
+		TransactionNumber: transactionNumber,
+		TransactionType:   TxStockOpnameFlow,
+		Metadata:          req.Metadata,
+	}
+
+	return InitiateTransactionApproval(approvalReq)
+}
+
+// ============================================================
+// AUTO-COMPLETE APPROVAL
+// Dipanggil dari services/approval_service.go:ApproveTransaction setelah
+// setiap approve, sama seperti autoCompleteMutationApproval.
+// Semua step approved → APPROVAL → EXECUTE_STOCK_OPNAME (eksekusi manual
+// oleh role yang berwenang, misal PIC Asset).
+// ============================================================
+
+func autoCompleteStockOpnameApproval(userID, transactionNumber, transactionType string) error {
+	if transactionType != TxStockOpnameFlow {
+		return nil
+	}
+
+	var total, approved int64
+	config.DB.Model(&models.TransactionApproval{}).
+		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, transactionType).
+		Count(&total)
+
+	config.DB.Model(&models.TransactionApproval{}).
+		Where("transaction_number = ? AND transaction_type = ? AND status = ?", transactionNumber, transactionType, "approved").
+		Count(&approved)
+
+	if total == 0 || approved < total {
+		return nil
+	}
+
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	if transaction.CurrentStage != models.StageApproval {
+		return nil
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageStockOpnameExecute); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageStockOpnameExecute,
+		models.ActionApprove, userID, nil, nil); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit().Error
+}
+
+// ============================================================
+// EKSEKUSI
+// EXECUTE_STOCK_OPNAME → FINISHED
+// Tulis temuan ke asset_values (snapshot baru) + assets.asset_status
+// (jika berubah) + asset_histories (audit before/after).
+// ============================================================
+
+func ExecuteStockOpname(userID string, transactionNumber string, req dto.ExecuteStockOpnameRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageStockOpnameExecute {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageStockOpnameExecute)
+	}
+
+	var items []models.TransactionStockOpname
+	if err := config.DB.Where("transaction_id = ?", transaction.ID).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, errors.New("no assets found in this stock opname")
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for _, item := range items {
+		var asset models.Asset
+		if err := tx.First(&asset, item.AssetID).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to load asset %s: %w", item.AssetNumber, err)
+		}
+
+		foundAssetStatus := item.AssetStatus
+		if foundAssetStatus == "" {
+			foundAssetStatus = asset.AssetStatus
+		}
+
+		var currentValue models.AssetValue
+		hasCurrentValue := true
+		if err := tx.Where("asset_id = ? AND is_active = ?", asset.ID, true).First(&currentValue).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				tx.Rollback()
+				return nil, fmt.Errorf("failed to load current asset value for %s: %w", item.AssetNumber, err)
+			}
+			hasCurrentValue = false
+		}
+
+		before := map[string]interface{}{"asset_status": asset.AssetStatus}
+		if hasCurrentValue {
+			before["condition"] = currentValue.Condition
+			before["physical_status"] = currentValue.PhysicalStatus
+			if err := tx.Model(&currentValue).Update("is_active", false).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("failed to deactivate current asset value for %s: %w", item.AssetNumber, err)
+			}
+		}
+
+		newValue := models.AssetValue{
+			AssetID:                 asset.ID,
+			EffectiveDate:           time.Now(),
+			BookValue:               currentValue.BookValue,
+			AcquisitionValue:        currentValue.AcquisitionValue,
+			AccumulatedDepreciation: currentValue.AccumulatedDepreciation,
+			Condition:               &item.Condition,
+			PhysicalStatus:          &item.PhysicalStatus,
+			AssetStatus:             &foundAssetStatus,
+			IsActive:                true,
+		}
+		if err := tx.Create(&newValue).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to create new asset value for %s: %w", item.AssetNumber, err)
+		}
+
+		if foundAssetStatus != asset.AssetStatus {
+			if err := tx.Model(&asset).Update("asset_status", foundAssetStatus).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("failed to update asset status for %s: %w", item.AssetNumber, err)
+			}
+		}
+
+		after := map[string]interface{}{
+			"asset_status":    foundAssetStatus,
+			"condition":       item.Condition,
+			"physical_status": item.PhysicalStatus,
+		}
+
+		beforeJSON, _ := json.Marshal(before)
+		afterJSON, _ := json.Marshal(after)
+		beforeStr := string(beforeJSON)
+		afterStr := string(afterJSON)
+
+		if err := CreateAssetHistory(tx, models.AssetHistory{
+			AssetID:         asset.ID,
+			TransactionType: TxStockOpnameFlow,
+			TransactionID:   &transaction.ID,
+			DocumentNumber:  &transactionNumber,
+			TransactionDate: &transaction.TransactionDate,
+			BeforeData:      &beforeStr,
+			AfterData:       &afterStr,
+			ChangedBy:       &userID,
+		}); err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to record asset history for %s: %w", item.AssetNumber, err)
+		}
+	}
+
+	// Pindahkan item dari "aktif" (transaction_stock_opnames) ke "history" —
+	// sama pola insert-select + delete kayak di SubmitStockOpname, dalam tx
+	// yang sama biar atomik dengan penulisan asset_values/asset_histories
+	// di atas dan perubahan stage di bawah.
+	if err := tx.Exec(`
+		INSERT INTO stock_opname_item_history
+			(transaction_id, transaction_number, asset_id, asset_number, physical_status, `+"`condition`"+`, asset_status, notes, created_at, updated_at)
+		SELECT transaction_id, transaction_number, asset_id, asset_number, physical_status, `+"`condition`"+`, asset_status, notes, created_at, updated_at
+		FROM transaction_stock_opnames
+		WHERE transaction_id = ?
+	`, transaction.ID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to move items to history table: %w", err)
+	}
+	if err := tx.Exec(`DELETE FROM transaction_stock_opnames WHERE transaction_id = ?`, transaction.ID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to clear moved active items: %w", err)
+	}
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageFinished); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageFinished,
+		models.ActionExecute, userID, nil, req.Notes); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// ============================================================
+// REJECT
+// ============================================================
+
+func RejectStockOpname(userID string, transactionNumber string, req dto.RejectStockOpnameRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage == models.StageDraft ||
+		transaction.CurrentStage == models.StageFinished ||
+		transaction.CurrentStage == models.StageRejected {
+		return nil, fmt.Errorf("cannot reject transaction in %s stage", transaction.CurrentStage)
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageRejected); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageRejected,
+		models.ActionReject, userID, nil, &req.Reason); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	MarkTransactionAsExpired(transactionNumber)
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// ============================================================
+// GET DETAIL
+// ============================================================
+
+// stockOpnameItemRow adalah representasi umum 1 baris temuan stock opname,
+// dipakai supaya GetStockOpnameFlowDetail bisa nampilin item dari salah satu
+// dari 3 tabel (draft/aktif/history — tergantung stage transaksi) lewat 1
+// kode path yang sama, tanpa peduli lagi row-nya sekarang fisik ada di tabel
+// mana.
+type stockOpnameItemRow struct {
+	ID                uint
+	TransactionID     uint
+	TransactionNumber string
+	AssetID           uint
+	AssetNumber       string
+	PhysicalStatus    string
+	Condition         string
+	AssetStatus       string
+	Notes             *string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	Asset             *models.Asset
+}
+
+func draftItemToRow(i models.StockOpnameDraftItem) stockOpnameItemRow {
+	return stockOpnameItemRow{
+		ID: i.ID, TransactionID: i.TransactionID, TransactionNumber: i.TransactionNumber,
+		AssetID: i.AssetID, AssetNumber: i.AssetNumber, PhysicalStatus: i.PhysicalStatus,
+		Condition: i.Condition, AssetStatus: i.AssetStatus, Notes: i.Notes,
+		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, Asset: i.Asset,
+	}
+}
+
+func activeItemToRow(i models.TransactionStockOpname) stockOpnameItemRow {
+	return stockOpnameItemRow{
+		ID: i.ID, TransactionID: i.TransactionID, TransactionNumber: i.TransactionNumber,
+		AssetID: i.AssetID, AssetNumber: i.AssetNumber, PhysicalStatus: i.PhysicalStatus,
+		Condition: i.Condition, AssetStatus: i.AssetStatus, Notes: i.Notes,
+		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, Asset: i.Asset,
+	}
+}
+
+func historyItemToRow(i models.StockOpnameItemHistory) stockOpnameItemRow {
+	return stockOpnameItemRow{
+		ID: i.ID, TransactionID: i.TransactionID, TransactionNumber: i.TransactionNumber,
+		AssetID: i.AssetID, AssetNumber: i.AssetNumber, PhysicalStatus: i.PhysicalStatus,
+		Condition: i.Condition, AssetStatus: i.AssetStatus, Notes: i.Notes,
+		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, Asset: i.Asset,
+	}
+}
+
+func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	// Item stock opname sekarang tersebar di 3 tabel tergantung stage:
+	// DRAFT -> stock_opname_draft_items, FINISHED -> stock_opname_item_history,
+	// selain itu (APPROVAL/EXECUTE_STOCK_OPNAME/REJECTED) -> transaction_stock_opnames.
+	var itemRows []stockOpnameItemRow
+	switch transaction.CurrentStage {
+	case models.StageDraft:
+		var items []models.StockOpnameDraftItem
+		config.DB.Preload("Asset.Category").Where("transaction_id = ?", transaction.ID).Order("asset_number ASC").Find(&items)
+		for _, it := range items {
+			itemRows = append(itemRows, draftItemToRow(it))
+		}
+	case models.StageFinished:
+		var items []models.StockOpnameItemHistory
+		config.DB.Preload("Asset.Category").Where("transaction_id = ?", transaction.ID).Order("asset_number ASC").Find(&items)
+		for _, it := range items {
+			itemRows = append(itemRows, historyItemToRow(it))
+		}
+	default:
+		var items []models.TransactionStockOpname
+		config.DB.Preload("Asset.Category").Where("transaction_id = ?", transaction.ID).Order("asset_number ASC").Find(&items)
+		for _, it := range items {
+			itemRows = append(itemRows, activeItemToRow(it))
+		}
+	}
+
+	var stages []models.TransactionStage
+	config.DB.
+		Where("transaction_id = ?", transaction.ID).
+		Order("created_at ASC").
+		Find(&stages)
+
+	var photos []models.StockOpnameAssetPhoto
+	config.DB.Where("transaction_id = ?", transaction.ID).Find(&photos)
+	photoByAssetID := make(map[uint]models.StockOpnameAssetPhoto, len(photos))
+	for _, p := range photos {
+		photoByAssetID[p.AssetID] = p
+	}
+
+	var borrowDocs []models.StockOpnameBorrowDocument
+	config.DB.Where("transaction_id = ?", transaction.ID).Find(&borrowDocs)
+	borrowDocByAssetID := make(map[uint]models.StockOpnameBorrowDocument, len(borrowDocs))
+	for _, d := range borrowDocs {
+		borrowDocByAssetID[d.AssetID] = d
+	}
+
+	itemResponses := make([]dto.StockOpnameFlowItemResponse, len(itemRows))
+	for i, item := range itemRows {
+		itemResponses[i] = buildStockOpnameItemResponse(item, photoByAssetID[item.AssetID], borrowDocByAssetID[item.AssetID])
+	}
+
+	return &dto.StockOpnameFlowDetailResponse{
+		Transaction:  mapTransactionHeaderToResponse(*transaction),
+		Items:        itemResponses,
+		Stages:       mapTransactionStagesToResponse(stages),
+		IsSubmissive: transaction.IsSubmissive,
+	}, nil
+}
+
+// buildStockOpnameItemResponse menggabungkan temuan auditor (item) dengan
+// data sistem aktif saat ini (asset + active asset_value) untuk perbandingan.
+// photo.ID == 0 berarti belum ada foto, borrowDoc.ID == 0 berarti belum ada
+// dokumen peminjaman buat item ini.
+func buildStockOpnameItemResponse(item stockOpnameItemRow, photo models.StockOpnameAssetPhoto, borrowDoc models.StockOpnameBorrowDocument) dto.StockOpnameFlowItemResponse {
+	resp := dto.StockOpnameFlowItemResponse{
+		ID:                item.ID,
+		TransactionID:     item.TransactionID,
+		TransactionNumber: item.TransactionNumber,
+		AssetID:           item.AssetID,
+		AssetNumber:       item.AssetNumber,
+		Notes:             item.Notes,
+		CreatedAt:         item.CreatedAt,
+		UpdatedAt:         item.UpdatedAt,
+	}
+
+	if item.PhysicalStatus != "" {
+		resp.FoundPhysicalStatus = &item.PhysicalStatus
+	}
+	if item.Condition != "" {
+		resp.FoundCondition = &item.Condition
+	}
+	if item.AssetStatus != "" {
+		resp.FoundAssetStatus = &item.AssetStatus
+	}
+
+	if item.Asset != nil {
+		resp.AssetName = &item.Asset.AssetName
+		resp.BranchCode = item.Asset.BranchCode
+		resp.SystemAssetStatus = item.Asset.AssetStatus
+		if item.Asset.Category != nil {
+			resp.CategoryName = &item.Asset.Category.CategoryName
+		}
+	}
+
+	var currentValue models.AssetValue
+	if err := config.DB.
+		Where("asset_id = ? AND is_active = ?", item.AssetID, true).
+		First(&currentValue).Error; err == nil {
+		resp.SystemCondition = currentValue.Condition
+		resp.SystemPhysicalStatus = currentValue.PhysicalStatus
+	}
+
+	if photo.ID != 0 {
+		resp.PhotoID = &photo.ID
+		url := fmt.Sprintf("/api/v1/transactions/stock-opname/photo/%d/file", photo.ID)
+		resp.PhotoURL = &url
+		resp.PhotoCapturedAt = &photo.CapturedAt
+	}
+
+	if borrowDoc.ID != 0 {
+		resp.BorrowDocumentID = &borrowDoc.ID
+		url := fmt.Sprintf("/api/v1/transactions/stock-opname/borrow-document/%d/file", borrowDoc.ID)
+		resp.BorrowDocumentURL = &url
+		resp.BorrowDocumentFileName = &borrowDoc.FileName
+	}
+
+	return resp
+}
+
+// ============================================================
+// LIST
+// ============================================================
+
+type StockOpnameListFilter struct {
+	Status       *string `form:"status"`
+	CurrentStage *string `form:"current_stage"`
+	CreatedBy    *string `form:"created_by"`
+	StartDate    *string `form:"start_date"`
+	EndDate      *string `form:"end_date"`
+	Page         int     `form:"page"`
+	Limit        int     `form:"limit"`
+}
+
+func GetAllStockOpnameDrafts(filter StockOpnameListFilter) ([]dto.StockOpnameFlowDetailResponse, int64, error) {
+	query := config.DB.Model(&models.Transaction{}).
+		Where("transaction_type = ?", TxStockOpnameFlow)
+
+	if filter.Status != nil {
+		query = query.Where("status = ?", *filter.Status)
+	}
+	if filter.CurrentStage != nil {
+		query = query.Where("current_stage = ?", *filter.CurrentStage)
+	}
+	if filter.CreatedBy != nil {
+		query = query.Where("created_by = ?", *filter.CreatedBy)
+	}
+	if filter.StartDate != nil {
+		query = query.Where("transaction_date >= ?", *filter.StartDate)
+	}
+	if filter.EndDate != nil {
+		query = query.Where("transaction_date <= ?", *filter.EndDate)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if filter.Page == 0 {
+		filter.Page = 1
+	}
+	if filter.Limit == 0 {
+		filter.Limit = 10
+	}
+	offset := (filter.Page - 1) * filter.Limit
+
+	var transactions []models.Transaction
+	if err := query.
+		Order("created_at DESC").
+		Offset(offset).
+		Limit(filter.Limit).
+		Find(&transactions).Error; err != nil {
+		return nil, 0, err
+	}
+
+	responses := make([]dto.StockOpnameFlowDetailResponse, len(transactions))
+	for i, t := range transactions {
+		detail, err := GetStockOpnameFlowDetail(t.TransactionNumber)
+		if err != nil {
+			return nil, 0, err
+		}
+		responses[i] = *detail
+	}
+
+	return responses, total, nil
+}
+
+// ============================================================
+// EXCEL TEMPLATE — label <-> enum mapping
+// Dipakai bersama oleh download (enum -> label) dan upload (label -> enum).
+// ============================================================
+
+var stockOpnamePhysicalStatusLabel = map[string]string{
+	"EXISTS":   "Ada",
+	"MISSING":  "Tidak Ada",
+	"BORROWED": "Dipinjam",
+}
+
+var stockOpnamePhysicalStatusValue = map[string]string{
+	"ada":       "EXISTS",
+	"tidak ada": "MISSING",
+	"dipinjam":  "BORROWED",
+}
+
+var stockOpnameConditionLabel = map[string]string{
+	"GOOD":           "Baik",
+	"FAIR":           "Cukup",
+	"POOR":           "Kurang",
+	"BROKEN":         "Rusak Berat",
+	"NOT_APPLICABLE": "Tidak Ada",
+}
+
+var stockOpnameConditionValue = map[string]string{
+	"baik":        "GOOD",
+	"cukup":       "FAIR",
+	"kurang":      "POOR",
+	"rusak berat": "BROKEN",
+	"tidak ada":   "NOT_APPLICABLE",
+}
+
+var stockOpnameAssetStatusLabel = map[string]string{
+	"ACTIVE":      "Aktif",
+	"INACTIVE":    "Tidak Aktif",
+	"MAINTENANCE": "Maintenance",
+	"RETIRED":     "Retired",
+}
+
+var stockOpnameAssetStatusValue = map[string]string{
+	"aktif":       "ACTIVE",
+	"tidak aktif": "INACTIVE",
+	"maintenance": "MAINTENANCE",
+	"retired":     "RETIRED",
+}
+
+const stockOpnameTemplateSheet = "Stock Opname"
+
+// ============================================================
+// EXCEL TEMPLATE — DOWNLOAD
+// Snapshot semua asset di draft + temuan yang udah keisi (kalau ada),
+// dipakai user sebagai template buat diisi/diedit lalu diupload balik.
+// ============================================================
+
+func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*excelize.File, string, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, "", err
+	}
+	if transaction.CreatedBy != userID {
+		return nil, "", errors.New("you can only download the template for your own stock opname draft")
+	}
+
+	var items []models.StockOpnameDraftItem
+	if err := config.DB.
+		Preload("Asset.Category").
+		Where("transaction_id = ?", transaction.ID).
+		Order("asset_number ASC").
+		Find(&items).Error; err != nil {
+		return nil, "", err
+	}
+
+	f := excelize.NewFile()
+	f.SetSheetName("Sheet1", stockOpnameTemplateSheet)
+
+	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	headers := []string{
+		"No", "Nomor Asset", "Nama Asset", "Kategori",
+		"Status Fisik (Ada/Tidak Ada)",
+		"Kondisi (Baik/Cukup/Kurang/Rusak Berat/Tidak Ada)",
+		"Status Aset (opsional, kosongkan jika tidak berubah)",
+		"Catatan",
+	}
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(stockOpnameTemplateSheet, cell, h)
+		f.SetCellStyle(stockOpnameTemplateSheet, cell, cell, headerStyle)
+	}
+
+	for i, item := range items {
+		row := i + 2
+		assetName, categoryName := "", ""
+		if item.Asset != nil {
+			assetName = item.Asset.AssetName
+			if item.Asset.Category != nil {
+				categoryName = item.Asset.Category.CategoryName
+			}
+		}
+		notes := ""
+		if item.Notes != nil {
+			notes = *item.Notes
+		}
+
+		values := []interface{}{
+			i + 1,
+			item.AssetNumber,
+			assetName,
+			categoryName,
+			stockOpnamePhysicalStatusLabel[item.PhysicalStatus],
+			stockOpnameConditionLabel[item.Condition],
+			stockOpnameAssetStatusLabel[item.AssetStatus],
+			notes,
+		}
+		for col, v := range values {
+			cell, _ := excelize.CoordinatesToCellName(col+1, row)
+			f.SetCellValue(stockOpnameTemplateSheet, cell, v)
+		}
+	}
+
+	colWidths := map[string]float64{"A": 6, "B": 18, "C": 28, "D": 18, "E": 26, "F": 36, "G": 40, "H": 40}
+	for col, w := range colWidths {
+		f.SetColWidth(stockOpnameTemplateSheet, col, col, w)
+	}
+
+	safeName := strings.NewReplacer("/", "-", " ", "_").Replace(transactionNumber)
+	filename := fmt.Sprintf("stock_opname_template_%s.xlsx", safeName)
+	return f, filename, nil
+}
+
+// ============================================================
+// EXCEL TEMPLATE — UPLOAD
+// Bulk update temuan berdasarkan file yang diisi user. Partial update:
+// baris valid langsung disimpan, baris invalid dikumpulkan sebagai error
+// report (gak menggagalkan keseluruhan proses).
+// ============================================================
+
+func cellAt(row []string, idx int) string {
+	if idx < 0 || idx >= len(row) {
+		return ""
+	}
+	return strings.TrimSpace(row[idx])
+}
+
+func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.Reader) (*dto.StockOpnameTemplateUploadResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only upload findings for DRAFT stock opnames")
+	}
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	xf, err := excelize.OpenReader(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read excel file: %w", err)
+	}
+	defer xf.Close()
+
+	sheet := xf.GetSheetName(0)
+	rows, err := xf.GetRows(sheet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read excel rows: %w", err)
+	}
+
+	var items []models.StockOpnameDraftItem
+	if err := config.DB.Where("transaction_id = ?", transaction.ID).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	itemByAssetNumber := make(map[string]models.StockOpnameDraftItem, len(items))
+	for _, item := range items {
+		itemByAssetNumber[item.AssetNumber] = item
+	}
+
+	var borrowDocAssetIDs []uint
+	config.DB.Model(&models.StockOpnameBorrowDocument{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("asset_id", &borrowDocAssetIDs)
+	hasBorrowDoc := make(map[uint]bool, len(borrowDocAssetIDs))
+	for _, id := range borrowDocAssetIDs {
+		hasBorrowDoc[id] = true
+	}
+
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
+
+	for i, row := range rows {
+		rowNum := i + 1
+		if rowNum == 1 {
+			continue // header
+		}
+
+		assetNumber := cellAt(row, 1)
+		if assetNumber == "" {
+			continue // baris kosong, skip diam-diam
+		}
+
+		item, ok := itemByAssetNumber[assetNumber]
+		if !ok {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: "asset tidak ditemukan di stock opname ini",
+			})
+			continue
+		}
+
+		physicalLabel := strings.ToLower(cellAt(row, 4))
+		conditionLabel := strings.ToLower(cellAt(row, 5))
+		assetStatusLabel := strings.ToLower(cellAt(row, 6))
+		notesCell := cellAt(row, 7)
+
+		physicalStatus, ok := stockOpnamePhysicalStatusValue[physicalLabel]
+		if !ok {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: fmt.Sprintf("status fisik tidak valid: %q (harus Ada / Tidak Ada / Dipinjam)", cellAt(row, 4)),
+			})
+			continue
+		}
+
+		condition, ok := stockOpnameConditionValue[conditionLabel]
+		if !ok {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: fmt.Sprintf("kondisi tidak valid: %q", cellAt(row, 5)),
+			})
+			continue
+		}
+
+		if err := validateFindingPhysicalConditionPair(physicalStatus, condition); err != nil {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: err.Error(),
+			})
+			continue
+		}
+
+		if physicalStatus == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: "dokumen peminjaman wajib diupload dulu lewat aplikasi sebelum status Dipinjam bisa disimpan",
+			})
+			continue
+		}
+
+		assetStatus := item.AssetStatus
+		if assetStatusLabel != "" {
+			mapped, ok := stockOpnameAssetStatusValue[assetStatusLabel]
+			if !ok {
+				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+					Row: rowNum, AssetNumber: assetNumber,
+					Message: fmt.Sprintf("status aset tidak valid: %q", cellAt(row, 6)),
+				})
+				continue
+			}
+			assetStatus = mapped
+		}
+
+		updates := map[string]interface{}{
+			"physical_status": physicalStatus,
+			"condition":       condition,
+			"asset_status":    assetStatus,
+			"notes":           notesCell,
+		}
+
+		if err := config.DB.Model(&models.StockOpnameDraftItem{}).
+			Where("id = ?", item.ID).
+			Updates(updates).Error; err != nil {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber,
+				Message: "gagal menyimpan: " + err.Error(),
+			})
+			continue
+		}
+
+		response.UpdatedCount++
+	}
+
+	response.FailedCount = len(response.Errors)
+
+	detail, err := GetStockOpnameFlowDetail(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	response.Detail = detail
+
+	return response, nil
+}
+
+// ============================================================
+// FOTO BUKTI FISIK PER ASSET
+//
+// Wajib diisi sebelum submit (lihat SubmitStockOpname). Divalidasi 3
+// lapis: ukuran file, tanggal modifikasi file (dikirim dari browser via
+// File.lastModified, maks 10 hari dari sekarang), dan foto gak boleh
+// dipakai dobel buat asset lain di stock opname yang sama (dicek lewat
+// hash SHA-256 isi file). Satu asset cuma boleh punya 1 foto aktif —
+// upload ulang menimpa foto sebelumnya.
+//
+// Sebelumnya divalidasi lewat EXIF DateTimeOriginal, tapi itu kelewat
+// strict — foto yang diteruskan lewat WhatsApp/aplikasi chat lain (atau
+// format selain JPEG) biasanya EXIF-nya udah hilang/kehapus padahal
+// fotonya masih valid & baru. Pakai tanggal "modified" file jauh lebih
+// longgar karena hampir semua file punya metadata ini.
+// ============================================================
+
+const (
+	stockOpnamePhotoMaxSize    = 2 * 1024 * 1024 // 2MB — biar enteng buat testing/upload dari lapangan
+	stockOpnamePhotoMaxAge     = 10 * 24 * time.Hour
+	stockOpnamePhotoStorageDir = "uploads/stock_opname_photos"
+)
+
+// resolvePhotoModifiedAt nentuin tanggal "modified" foto dari nilai
+// File.lastModified (epoch milliseconds) yang dikirim frontend. Kalau
+// gak dikirim/gak valid, dianggap baru saja (tidak ditolak) — daripada
+// bikin upload gagal gara-gara metadata yang emang gak selalu ada.
+func resolvePhotoModifiedAt(clientModifiedAtMs int64) time.Time {
+	if clientModifiedAtMs <= 0 {
+		return time.Now()
+	}
+	return time.UnixMilli(clientModifiedAtMs)
+}
+
+func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetID uint, file multipart.File, header *multipart.FileHeader, clientModifiedAtMs int64) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only upload photos on DRAFT stock opnames")
+	}
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	if header.Size > stockOpnamePhotoMaxSize {
+		return nil, fmt.Errorf("ukuran foto maksimal 2MB (file ini %.2f MB)", float64(header.Size)/1024/1024)
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" {
+		return nil, errors.New("foto harus format JPEG, PNG, atau WEBP")
+	}
+
+	var item models.StockOpnameDraftItem
+	if err := config.DB.
+		Where("transaction_id = ? AND asset_id = ?", transaction.ID, assetID).
+		First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("asset not found in this stock opname")
+		}
+		return nil, err
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read uploaded file: %w", err)
+	}
+	if int64(len(data)) > stockOpnamePhotoMaxSize {
+		return nil, fmt.Errorf("ukuran foto maksimal 2MB (file ini %.2f MB)", float64(len(data))/1024/1024)
+	}
+
+	capturedAt := resolvePhotoModifiedAt(clientModifiedAtMs)
+	if time.Since(capturedAt) > stockOpnamePhotoMaxAge {
+		return nil, fmt.Errorf("foto ini terakhir dimodifikasi tanggal %s, sudah lebih dari 10 hari dari sekarang — upload foto yang lebih baru", capturedAt.Format("02 Jan 2006"))
+	}
+	if capturedAt.After(time.Now().Add(1 * time.Hour)) {
+		return nil, errors.New("tanggal modifikasi foto ada di masa depan — cek pengaturan tanggal/jam HP kamu")
+	}
+
+	hashBytes := sha256.Sum256(data)
+	hashHex := hex.EncodeToString(hashBytes[:])
+
+	var dupCount int64
+	config.DB.Model(&models.StockOpnameAssetPhoto{}).
+		Where("transaction_id = ? AND file_hash = ? AND asset_id != ?", transaction.ID, hashHex, assetID).
+		Count(&dupCount)
+	if dupCount > 0 {
+		return nil, errors.New("foto ini sudah dipakai buat asset lain di stock opname ini — tiap asset wajib pakai foto yang berbeda")
+	}
+
+	dir := filepath.Join(stockOpnamePhotoStorageDir, sanitizePathSegment(transactionNumber))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to prepare storage directory: %w", err)
+	}
+
+	baseName := sanitizePathSegment(strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename)))
+	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), baseName, ext)
+	fullPath := filepath.Join(dir, fileName)
+	if err := os.WriteFile(fullPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("failed to save file: %w", err)
+	}
+
+	var existing models.StockOpnameAssetPhoto
+	err = config.DB.Where("transaction_id = ? AND asset_id = ?", transaction.ID, assetID).First(&existing).Error
+	switch {
+	case err == nil:
+		oldPath := existing.FilePath
+		if updateErr := config.DB.Model(&existing).Updates(map[string]interface{}{
+			"file_name":   header.Filename,
+			"file_path":   fullPath,
+			"file_size":   int64(len(data)),
+			"file_hash":   hashHex,
+			"captured_at": capturedAt,
+			"uploaded_by": userID,
+		}).Error; updateErr != nil {
+			os.Remove(fullPath)
+			return nil, updateErr
+		}
+		if oldPath != "" && oldPath != fullPath {
+			os.Remove(oldPath) // best-effort, file lama gak dipakai lagi
+		}
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		newPhoto := models.StockOpnameAssetPhoto{
+			TransactionID: transaction.ID,
+			AssetID:       assetID,
+			FileName:      header.Filename,
+			FilePath:      fullPath,
+			FileSize:      int64(len(data)),
+			FileHash:      hashHex,
+			CapturedAt:    capturedAt,
+			UploadedBy:    userID,
+		}
+		if createErr := config.DB.Create(&newPhoto).Error; createErr != nil {
+			os.Remove(fullPath)
+			return nil, createErr
+		}
+	default:
+		os.Remove(fullPath)
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// GetStockOpnameAssetPhotoFilePath dipakai controller buat serve file foto.
+func GetStockOpnameAssetPhotoFilePath(photoID uint) (string, string, error) {
+	var photo models.StockOpnameAssetPhoto
+	if err := config.DB.First(&photo, photoID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", "", errors.New("photo not found")
+		}
+		return "", "", err
+	}
+	if _, err := os.Stat(photo.FilePath); err != nil {
+		return "", "", errors.New("photo file not found on disk")
+	}
+	return photo.FilePath, photo.FileName, nil
+}
+
+// ============================================================
+// DOKUMEN PEMINJAMAN (PDF) PER ASSET — status fisik BORROWED
+//
+// Wajib diupload sebelum status BORROWED bisa disimpan di
+// UpdateStockOpnameFinding/BulkUpdateStockOpnameFinding/template upload, dan
+// wajib ada sebelum submit (lihat SubmitStockOpname). Satu asset cuma boleh
+// punya 1 dokumen aktif — upload ulang menimpa dokumen sebelumnya.
+//
+// Belum ada config buat ukuran max/dsb (nyusul) — untuk sekarang dipakai
+// batas tetap 5MB, format PDF-only.
+// ============================================================
+
+const (
+	stockOpnameBorrowDocMaxSize    = 5 * 1024 * 1024 // 5MB
+	stockOpnameBorrowDocStorageDir = "uploads/stock_opname_borrow_documents"
+)
+
+func UploadStockOpnameBorrowDocument(userID string, transactionNumber string, assetID uint, file multipart.File, header *multipart.FileHeader) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	if transaction.CurrentStage != models.StageDraft {
+		return nil, errors.New("can only upload borrow documents on DRAFT stock opnames")
+	}
+	if transaction.CreatedBy != userID {
+		return nil, errors.New("you can only modify your own stock opname draft")
+	}
+
+	if header.Size > stockOpnameBorrowDocMaxSize {
+		return nil, fmt.Errorf("ukuran dokumen maksimal 5MB (file ini %.2f MB)", float64(header.Size)/1024/1024)
+	}
+
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+	allowedExts := allowedBorrowDocExtensions(soCfg)
+	if len(allowedExts) == 0 {
+		return nil, errors.New("belum ada format file yang diizinkan buat dokumen peminjaman — atur dulu di halaman config stock opname")
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	allowed := false
+	for _, e := range allowedExts {
+		if ext == e {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return nil, fmt.Errorf("format dokumen peminjaman harus salah satu dari: %s", strings.Join(allowedExts, ", "))
+	}
+
+	var item models.StockOpnameDraftItem
+	if err := config.DB.
+		Where("transaction_id = ? AND asset_id = ?", transaction.ID, assetID).
+		First(&item).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("asset not found in this stock opname")
+		}
+		return nil, err
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read uploaded file: %w", err)
+	}
+	if int64(len(data)) > stockOpnameBorrowDocMaxSize {
+		return nil, fmt.Errorf("ukuran dokumen maksimal 5MB (file ini %.2f MB)", float64(len(data))/1024/1024)
+	}
+
+	dir := filepath.Join(stockOpnameBorrowDocStorageDir, sanitizePathSegment(transactionNumber))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to prepare storage directory: %w", err)
+	}
+
+	baseName := sanitizePathSegment(strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename)))
+	fileName := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), baseName, ext)
+	fullPath := filepath.Join(dir, fileName)
+	if err := os.WriteFile(fullPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("failed to save file: %w", err)
+	}
+
+	var existing models.StockOpnameBorrowDocument
+	err = config.DB.Where("transaction_id = ? AND asset_id = ?", transaction.ID, assetID).First(&existing).Error
+	switch {
+	case err == nil:
+		oldPath := existing.FilePath
+		if updateErr := config.DB.Model(&existing).Updates(map[string]interface{}{
+			"file_name":   header.Filename,
+			"file_path":   fullPath,
+			"file_size":   int64(len(data)),
+			"uploaded_by": userID,
+		}).Error; updateErr != nil {
+			os.Remove(fullPath)
+			return nil, updateErr
+		}
+		if oldPath != "" && oldPath != fullPath {
+			os.Remove(oldPath) // best-effort, file lama gak dipakai lagi
+		}
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		newDoc := models.StockOpnameBorrowDocument{
+			TransactionID: transaction.ID,
+			AssetID:       assetID,
+			FileName:      header.Filename,
+			FilePath:      fullPath,
+			FileSize:      int64(len(data)),
+			UploadedBy:    userID,
+		}
+		if createErr := config.DB.Create(&newDoc).Error; createErr != nil {
+			os.Remove(fullPath)
+			return nil, createErr
+		}
+	default:
+		os.Remove(fullPath)
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// GetStockOpnameBorrowDocumentFilePath dipakai controller buat serve file dokumen.
+func GetStockOpnameBorrowDocumentFilePath(docID uint) (string, string, error) {
+	var doc models.StockOpnameBorrowDocument
+	if err := config.DB.First(&doc, docID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", "", errors.New("borrow document not found")
+		}
+		return "", "", err
+	}
+	if _, err := os.Stat(doc.FilePath); err != nil {
+		return "", "", errors.New("borrow document file not found on disk")
+	}
+	return doc.FilePath, doc.FileName, nil
+}

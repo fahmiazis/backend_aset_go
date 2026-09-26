@@ -11,6 +11,22 @@ import (
 // FIX: hapus strconv, ID sudah uint. Hapus Creator/Approver relation (tidak ada di model).
 // ============================================================================
 
+// resolveUsername mengubah user ID (UUID) jadi username-nya, biar response
+// tidak menampilkan UUID mentah ke FE. Fallback ke ID aslinya kalau user
+// tidak ditemukan (misal sudah dihapus) atau ID kosong.
+func resolveUsername(userID string) string {
+	if userID == "" {
+		return userID
+	}
+
+	var user models.User
+	if err := config.DB.Select("username").Where("id = ?", userID).First(&user).Error; err != nil {
+		return userID
+	}
+
+	return user.Username
+}
+
 // transactionNeedsRevision cek apakah ada baris transaksi yang ditandai
 // approver perlu diperbaiki.
 //

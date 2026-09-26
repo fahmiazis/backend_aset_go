@@ -155,6 +155,9 @@ var stageToStatus = map[string]string{
 	// mutation
 	models.StageMutationReceiving: models.TransactionStatusProcessing,
 	models.StageMutationExecute:   models.TransactionStatusProcessing,
+
+	// stock opname
+	models.StageStockOpnameExecute: models.TransactionStatusProcessing,
 }
 
 // updateTransactionStage update current_stage & status di tabel transactions
