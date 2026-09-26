@@ -23,6 +23,9 @@ func (DepreciationSetting) TableName() string { return "depreciation_settings" }
 const (
 	SettingTypeCategory = "CATEGORY"
 	SettingTypeAsset    = "ASSET"
+	// Cadangan: dipakai aset yang tidak punya setting ASSET maupun CATEGORY.
+	// Tanpa reference_id, dan hanya boleh satu yang aktif.
+	SettingTypeDefault = "DEFAULT"
 )
 
 const (

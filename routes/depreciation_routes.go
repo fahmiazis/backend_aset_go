@@ -31,10 +31,19 @@ func SetupDepreciationRoutes(rg *gin.RouterGroup) {
 	{
 		depreciation.GET("/monthly", controllers.GetMonthlyDepreciationCalculations)
 
+		// Tombol "Run Depreciation" di halaman Asset. Hak aksesnya di menu
+		// permission "Asset Run Depreciation" (route_path /depreciation/calculate).
+		depreciation.POST("/calculate",
+			middleware.RequirePermission("run_depreciation"),
+			controllers.CalculateMonthlyDepreciation)
+
+		// Untuk menyembunyikan tombol: sidebar tidak memuat menu bertipe
+		// permission, jadi frontend bertanya langsung.
+		depreciation.GET("/calculate/allowed", controllers.CanRunDepreciation)
+
 		adminDepr := depreciation.Group("")
 		adminDepr.Use(middleware.RequireRole("admin"))
 		{
-			adminDepr.POST("/calculate", controllers.CalculateMonthlyDepreciation)
 			adminDepr.POST("/calculations/lock", controllers.LockMonthlyDepreciation)
 		}
 	}

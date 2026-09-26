@@ -126,12 +126,16 @@ func CalculateMonthlyDepreciation(c *gin.Context) {
 		return
 	}
 
-	if err := services.CalculateMonthlyDepreciation(userID, req); err != nil {
+	processed, err := services.CalculateMonthlyDepreciation(userID, req)
+	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	utils.SuccessResponse(c, http.StatusOK, "Monthly depreciation calculated successfully", nil)
+	utils.SuccessResponse(c, http.StatusOK, "Monthly depreciation calculated successfully", gin.H{
+		"period":           req.Period,
+		"processed_assets": processed,
+	})
 }
 
 func LockMonthlyDepreciation(c *gin.Context) {
@@ -147,4 +151,11 @@ func LockMonthlyDepreciation(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "Monthly depreciation locked successfully for period "+period, nil)
+}
+
+// CanRunDepreciation → GET /depreciation/calculate/allowed
+func CanRunDepreciation(c *gin.Context) {
+	utils.SuccessResponse(c, http.StatusOK, "OK", gin.H{
+		"allowed": services.CanRunDepreciation(c.GetString("user_id")),
+	})
 }

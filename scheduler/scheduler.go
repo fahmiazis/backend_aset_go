@@ -43,7 +43,7 @@ func runMonthlyDepreciation() {
 
 	fmt.Printf("[Scheduler] Running monthly depreciation for period: %s\n", period)
 
-	err := services.CalculateMonthlyDepreciation("system", dto.CalculateDepreciationRequest{
+	processed, err := services.CalculateMonthlyDepreciation("system", dto.CalculateDepreciationRequest{
 		Period: period,
 	})
 
@@ -52,7 +52,7 @@ func runMonthlyDepreciation() {
 		return
 	}
 
-	fmt.Printf("[Scheduler] Monthly depreciation completed for period: %s\n", period)
+	fmt.Printf("[Scheduler] Monthly depreciation completed for period: %s (%d assets)\n", period, processed)
 
 	// Auto lock setelah calculate berhasil
 	if err := services.LockMonthlyDepreciation(period); err != nil {

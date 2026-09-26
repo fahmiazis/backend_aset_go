@@ -5,8 +5,8 @@ import "time"
 // --- Depreciation Settings ---
 
 type CreateDepreciationSettingRequest struct {
-	SettingType        string   `json:"setting_type" binding:"required,oneof=CATEGORY ASSET"`
-	ReferenceID        *uint    `json:"reference_id"`    // FIX: category_id atau asset_id tergantung setting_type
+	SettingType        string   `json:"setting_type" binding:"required,oneof=CATEGORY ASSET DEFAULT"`
+	ReferenceID        *uint    `json:"reference_id"`    // FIX: category_id atau asset_id tergantung setting_type; kosong untuk DEFAULT
 	ReferenceValue     *string  `json:"reference_value"` // FIX: category_code atau asset_number
 	CalculationMethod  string   `json:"calculation_method" binding:"required,oneof=STRAIGHT_LINE DECLINING_BALANCE"`
 	DepreciationPeriod string   `json:"depreciation_period" binding:"required,oneof=MONTHLY DAILY"`

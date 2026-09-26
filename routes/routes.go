@@ -36,6 +36,7 @@ func SetupRoutes(r *gin.Engine) {
 		SetupHandoverRoutes(v1)
 		SetupStockOpnameFlowRoutes(v1)
 		SetupReportRoutes(v1)
+		SetupDashboardRoutes(v1)
 	}
 
 	// Health check endpoint (no auth required)

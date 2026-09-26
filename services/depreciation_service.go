@@ -16,8 +16,18 @@ import (
 // ============================================================================
 
 func CreateDepreciationSetting(req dto.CreateDepreciationSettingRequest) (*dto.DepreciationSettingResponse, error) {
-	// FIX: Validasi pakai ReferenceID bukan CategoryID/AssetID terpisah
-	if req.ReferenceID == nil {
+	if req.SettingType == models.SettingTypeDefault {
+		// DEFAULT berlaku untuk semua aset tanpa setting lain, tidak menunjuk
+		// ke kategori/aset tertentu
+		req.ReferenceID = nil
+		req.ReferenceValue = nil
+		if req.IsActive {
+			if err := ensureSingleActiveDefault(0); err != nil {
+				return nil, err
+			}
+		}
+	} else if req.ReferenceID == nil {
+		// FIX: Validasi pakai ReferenceID bukan CategoryID/AssetID terpisah
 		return nil, errors.New("reference_id is required")
 	}
 
@@ -85,6 +95,19 @@ func CreateDepreciationSetting(req dto.CreateDepreciationSettingRequest) (*dto.D
 	return GetDepreciationSettingByID(setting.ID)
 }
 
+// ensureSingleActiveDefault — setting DEFAULT yang aktif hanya boleh satu,
+// kalau tidak aset tanpa setting akan disusutkan dengan aturan yang acak.
+func ensureSingleActiveDefault(excludeID uint) error {
+	var count int64
+	config.DB.Model(&models.DepreciationSetting{}).
+		Where("setting_type = ? AND is_active = ? AND id <> ?", models.SettingTypeDefault, true, excludeID).
+		Count(&count)
+	if count > 0 {
+		return errors.New("an active DEFAULT depreciation setting already exists, deactivate it first")
+	}
+	return nil
+}
+
 func UpdateDepreciationSetting(id uint, req dto.UpdateDepreciationSettingRequest) (*dto.DepreciationSettingResponse, error) {
 	var setting models.DepreciationSetting
 	if err := config.DB.First(&setting, id).Error; err != nil {
@@ -109,6 +132,11 @@ func UpdateDepreciationSetting(id uint, req dto.UpdateDepreciationSettingRequest
 		updates["depreciation_rate"] = *req.DepreciationRate
 	}
 	if req.IsActive != nil {
+		if *req.IsActive && setting.SettingType == models.SettingTypeDefault {
+			if err := ensureSingleActiveDefault(setting.ID); err != nil {
+				return nil, err
+			}
+		}
 		updates["is_active"] = *req.IsActive
 	}
 	// FIX: tambah EndDate update
@@ -190,28 +218,58 @@ func GetMonthlyDepreciationCalculations(period string) ([]dto.MonthlyDepreciatio
 	return mapMonthlyDepreciationsToResponse(calculations), nil
 }
 
-func CalculateMonthlyDepreciation(userID string, req dto.CalculateDepreciationRequest) error {
+// CanRunDepreciation — sama dengan pemeriksaan RequirePermission pada
+// POST /depreciation/calculate, dipakai frontend untuk menampilkan tombol.
+func CanRunDepreciation(userID string) bool {
+	return userHasMenuPermission(userRoleIDs(userID), "/depreciation/calculate", []string{"run_depreciation"})
+}
+
+var depreciableAssetStatuses = []string{
+	"ACTIVE",
+	models.AssetStatusAvailable,
+	models.AssetStatusInMutation,
+	models.AssetStatusInDisposal,
+	models.AssetStatusInHandover,
+}
+
+// CalculateMonthlyDepreciation — mengembalikan jumlah aset yang dihitung.
+func CalculateMonthlyDepreciation(userID string, req dto.CalculateDepreciationRequest) (int, error) {
+	processed := 0
 	// FIX: cek pakai period string bukan month+year
 	var existing models.MonthlyDepreciationCalculation
 	if err := config.DB.
 		Where("period = ? AND is_locked = ?", req.Period, true).
 		First(&existing).Error; err == nil {
-		return errors.New("depreciation already calculated and locked for this period")
+		return 0, errors.New("depreciation already calculated and locked for this period")
 	}
 
 	// Parse period untuk dapat calculation_date (hari pertama bulan tersebut)
 	calculationDate, err := time.Parse("2006-01", req.Period)
 	if err != nil {
-		return errors.New("invalid period format, use YYYY-MM")
+		return 0, errors.New("invalid period format, use YYYY-MM")
+	}
+	if req.Period > time.Now().Format("2006-01") {
+		return 0, errors.New("cannot calculate depreciation for a future period")
 	}
 
-	// Get all active assets yang siap didepresiasi
-	// Status ACTIVE (asset lama) atau AVAILABLE (asset baru setelah GR)
+	// Aset yang masih dimiliki perusahaan tetap disusutkan, termasuk yang sedang
+	// dalam proses mutasi / disposal / serah terima. Dulu hanya AVAILABLE
+	// (konstantanya tertulis dua kali), sehingga aset yang sedang diproses
+	// berhenti disusutkan. DISPOSED dan PENDING_RECEIPT (belum diterima) tidak.
 	var assets []models.Asset
 	if err := config.DB.
-		Where("asset_status IN ?", []string{models.AssetStatusAvailable, models.AssetStatusAvailable}).
+		Where("asset_status IN ?", depreciableAssetStatuses).
 		Find(&assets).Error; err != nil {
-		return err
+		return 0, err
+	}
+
+	// Setting DEFAULT (kalau ada) — cadangan untuk aset tanpa setting ASSET
+	// maupun CATEGORY. Dibaca sekali, bukan per aset.
+	var defaultSetting *models.DepreciationSetting
+	var fallback models.DepreciationSetting
+	if err := config.DB.Where("setting_type = ? AND is_active = ?", models.SettingTypeDefault, true).
+		Order("id DESC").First(&fallback).Error; err == nil {
+		defaultSetting = &fallback
 	}
 
 	tx := config.DB.Begin()
@@ -239,8 +297,22 @@ func CalculateMonthlyDepreciation(userID string, req dto.CalculateDepreciationRe
 			}
 		}
 
+		if err != nil && defaultSetting != nil {
+			// Fallback terakhir: setting DEFAULT
+			setting = *defaultSetting
+			err = nil
+		}
+
 		if err != nil {
 			// Skip asset yang tidak punya depreciation setting
+			continue
+		}
+
+		var calculated int64
+		tx.Model(&models.MonthlyDepreciationCalculation{}).
+			Where("asset_id = ? AND period = ?", asset.ID, req.Period).
+			Count(&calculated)
+		if calculated > 0 {
 			continue
 		}
 
@@ -248,6 +320,14 @@ func CalculateMonthlyDepreciation(userID string, req dto.CalculateDepreciationRe
 		var currentValue models.AssetValue
 		if err := tx.Where("asset_id = ? AND is_active = ?", asset.ID, true).
 			First(&currentValue).Error; err != nil {
+			continue
+		}
+
+		// Nilai aktif yang sudah berada di/sesudah period ini (mis. aset baru
+		// dibuat bulan ini) tidak disusutkan mundur.
+		// Dibandingkan per bulan (YYYY-MM): DB dibaca dengan loc=Local sedangkan
+		// calculationDate hasil time.Parse berzona UTC.
+		if currentValue.EffectiveDate.Format("2006-01") >= req.Period {
 			continue
 		}
 
@@ -285,31 +365,18 @@ func CalculateMonthlyDepreciation(userID string, req dto.CalculateDepreciationRe
 			IsLocked:                         false,
 		}
 
-		// Cek apakah sudah ada kalkulasi untuk period ini (update jika belum locked)
-		var existingCalc models.MonthlyDepreciationCalculation
-		err = tx.Where("asset_id = ? AND period = ?", asset.ID, req.Period).
-			First(&existingCalc).Error
-		if err == nil {
-			if existingCalc.IsLocked {
-				continue // skip yang sudah locked
-			}
-			// Update existing
-			if err := tx.Model(&existingCalc).Updates(calculation).Error; err != nil {
-				tx.Rollback()
-				return err
-			}
-		} else {
-			// Create baru
-			if err := tx.Create(&calculation).Error; err != nil {
-				tx.Rollback()
-				return err
-			}
+		// Aset yang sudah dihitung untuk period ini dilewati. Dulu kalkulasinya
+		// di-update lalu asset_values baru tetap dibuat dari nilai yang SUDAH
+		// disusutkan — menjalankan dua kali berarti penyusutan dobel.
+		if err := tx.Create(&calculation).Error; err != nil {
+			tx.Rollback()
+			return 0, err
 		}
 
 		// Update asset value lama jadi tidak active
 		if err := tx.Model(&currentValue).Update("is_active", false).Error; err != nil {
 			tx.Rollback()
-			return err
+			return 0, err
 		}
 
 		// Buat asset value baru
@@ -327,11 +394,15 @@ func CalculateMonthlyDepreciation(userID string, req dto.CalculateDepreciationRe
 
 		if err := tx.Create(&newAssetValue).Error; err != nil {
 			tx.Rollback()
-			return err
+			return 0, err
 		}
+		processed++
 	}
 
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	return processed, nil
 }
 
 func LockMonthlyDepreciation(period string) error {
