@@ -27,6 +27,10 @@ type stageOwner struct {
 	// true kalau stage ini dikerjakan cabang TUJUAN transaksi, bukan cabang
 	// pengaju — mis. konfirmasi penerimaan mutasi.
 	byDestinationBranch bool
+	// opsional: subquery id transaksi di stage ini yang sudah BUKAN tugas
+	// pemilik stage walau stage-nya belum berubah (mis. disposal yang sudah
+	// masuk agreement aktif)
+	excludeIDs func() *gorm.DB
 }
 
 type waitingConfig struct {
@@ -228,10 +232,26 @@ func applyWaitingFilter(query *gorm.DB, userID string, cfg waitingConfig) *gorm.
 
 	if len(byCreator) > 0 {
 		if peers := branchPeerUserIDs(userID); len(peers) > 0 {
-			conditions = conditions.Or(
-				config.DB.Where("current_stage IN ?", byCreator).
-					Where("created_by IN ?", peers),
-			)
+			// stage dengan pengecualian dapat kondisinya sendiri
+			plain := make([]string, 0, len(byCreator))
+			for _, stage := range byCreator {
+				owner := cfg.owners[stage]
+				if owner.excludeIDs == nil {
+					plain = append(plain, stage)
+					continue
+				}
+				conditions = conditions.Or(
+					config.DB.Where("current_stage = ?", stage).
+						Where("created_by IN ?", peers).
+						Where("id NOT IN (?)", owner.excludeIDs()),
+				)
+			}
+			if len(plain) > 0 {
+				conditions = conditions.Or(
+					config.DB.Where("current_stage IN ?", plain).
+						Where("created_by IN ?", peers),
+				)
+			}
 		}
 	}
 
@@ -282,6 +302,16 @@ func isWaitingForUser(userID string, transaction *models.Transaction, cfg waitin
 
 	if !userHasMenuPermission(roleIDs, owner.routePath, owner.permissions) {
 		return false
+	}
+
+	if owner.excludeIDs != nil {
+		var excluded int64
+		config.DB.Model(&models.Transaction{}).
+			Where("id = ? AND id IN (?)", transaction.ID, owner.excludeIDs()).
+			Count(&excluded)
+		if excluded > 0 {
+			return false
+		}
 	}
 
 	if owner.byDestinationBranch {

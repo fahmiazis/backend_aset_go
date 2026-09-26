@@ -61,16 +61,22 @@ func generateAgreementNumber(tx *gorm.DB) (string, error) {
 // Agreement yang REJECTED tidak mengunci anggotanya — transaksinya kembali
 // menunggu dan bisa dikelompokkan ulang.
 func eligibleAgreementQuery() *gorm.DB {
-	activeAgreementTx := config.DB.Model(&models.DisposalAgreementItem{}).
+	return config.DB.Model(&models.Transaction{}).
+		Where("transaction_type = ?", TxDisposalFlow).
+		Where("current_stage = ?", models.StageDisposalApprovalAgreement).
+		Where("id NOT IN (?)", activeAgreementTransactionIDs())
+}
+
+// activeAgreementTransactionIDs — subquery id transaksi yang sedang terikat
+// agreement aktif (belum ditolak). Dipakai juga mesin "Menunggu Saya": disposal
+// yang sudah dikelompokkan bukan lagi tugas pic asset, walau stage-nya masih
+// APPROVAL_AGREEMENT sampai agreement-nya disetujui.
+func activeAgreementTransactionIDs() *gorm.DB {
+	return config.DB.Model(&models.DisposalAgreementItem{}).
 		Select("disposal_agreement_items.transaction_id").
 		Joins("JOIN disposal_agreements ON disposal_agreements.id = disposal_agreement_items.agreement_id").
 		Where("disposal_agreements.deleted_at IS NULL").
 		Where("disposal_agreements.current_stage <> ?", models.StageAgreementRejected)
-
-	return config.DB.Model(&models.Transaction{}).
-		Where("transaction_type = ?", TxDisposalFlow).
-		Where("current_stage = ?", models.StageDisposalApprovalAgreement).
-		Where("id NOT IN (?)", activeAgreementTx)
 }
 
 func GetEligibleDisposalsForAgreement() ([]dto.DisposalAgreementItemResponse, error) {

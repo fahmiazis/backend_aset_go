@@ -29,9 +29,12 @@ var disposalWaiting = waitingConfig{
 			routePath: "/transactions/disposal/asset-deletion", permissions: []string{"execute_asset_deletion"},
 		},
 		// Tahap kesepakatan dikerjakan lewat pengelompokan agreement, bukan
-		// endpoint per transaksi
+		// endpoint per transaksi. Begitu sudah masuk agreement aktif, bolanya
+		// pindah ke approver agreement — stage transaksinya sendiri baru
+		// berubah setelah agreement disetujui.
 		models.StageDisposalApprovalAgreement: {
 			routePath: "/transactions/disposal-agreements", permissions: []string{"manage_disposal_agreement"},
+			excludeIDs: activeAgreementTransactionIDs,
 		},
 	},
 }
