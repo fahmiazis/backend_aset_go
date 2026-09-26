@@ -6,6 +6,7 @@ import (
 	"backend-go/models"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -135,6 +136,28 @@ func GetAllMutations(filter dto.TransactionListFilter) ([]dto.MutationResponse, 
 
 	if filter.Status != nil {
 		query = query.Where("status = ?", *filter.Status)
+	}
+	if filter.CurrentStage != nil && *filter.CurrentStage != "" {
+		// Menerima beberapa stage sekaligus, dipisah koma. Dipakai tab di
+		// halaman daftar yang mengelompokkan stage berdasarkan tahap kerja.
+		stages := make([]string, 0)
+		for _, stage := range strings.Split(*filter.CurrentStage, ",") {
+			if trimmed := strings.TrimSpace(stage); trimmed != "" {
+				stages = append(stages, trimmed)
+			}
+		}
+
+		if len(stages) == 1 {
+			query = query.Where("current_stage = ?", stages[0])
+		} else if len(stages) > 1 {
+			query = query.Where("current_stage IN ?", stages)
+		}
+	}
+	if filter.CreatedBy != nil {
+		query = query.Where("created_by = ?", *filter.CreatedBy)
+	}
+	if filter.WaitingForMe && filter.ViewerUserID != "" {
+		query = applyMutationWaitingFilter(query, filter.ViewerUserID)
 	}
 	if filter.StartDate != nil {
 		query = query.Where("transaction_date >= ?", *filter.StartDate)

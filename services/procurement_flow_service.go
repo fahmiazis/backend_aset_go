@@ -60,6 +60,17 @@ func SubmitProcurement(userID string, transactionNumber string, req dto.SubmitPr
 		return nil, err
 	}
 
+
+	// Revisi dianggap selesai begitu transaksi disubmit ulang
+	if err := tx.Model(&models.TransactionProcurement{}).
+		Where("transaction_id = ?", transaction.ID).
+		Updates(map[string]interface{}{
+			"needs_revision": false,
+			"revision_notes": nil,
+		}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	if err := recordStage(tx, transaction.ID, transactionNumber,
 		fromStage, models.StageAssetVerification,
 		models.ActionSubmit, userID, nil, req.Notes); err != nil {

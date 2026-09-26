@@ -23,7 +23,12 @@ func GetAllAssets(filter dto.AssetListFilter) ([]dto.AssetResponse, int64, error
 	}
 	if filter.Search != nil && *filter.Search != "" {
 		search := "%" + *filter.Search + "%"
-		query = query.Where("asset_number ILIKE ? OR asset_name ILIKE ?", search, search)
+		// FIX: ILIKE itu sintaks PostgreSQL — MariaDB menolaknya dengan syntax
+		// error, jadi SELURUH request /assets yang memakai `search` selalu gagal.
+		// LIKE di MySQL/MariaDB sudah case-insensitive untuk collation utf8mb4_*_ci.
+		// Tanda kurung dipasang eksplisit supaya OR tidak melebar ke filter lain
+		// (branch_code, asset_status, category_id).
+		query = query.Where("(asset_number LIKE ? OR asset_name LIKE ?)", search, search)
 	}
 
 	var total int64

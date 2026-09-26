@@ -6,6 +6,7 @@ import (
 	"backend-go/utils"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -53,7 +54,7 @@ func RequireRole(requiredRoles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rolesInterface, exists := c.Get("roles")
 		if !exists {
-			utils.ErrorResponse(c, http.StatusForbidden, "No roles found")
+			utils.ErrorResponse(c, http.StatusForbidden, "Access denied: your account has no role assigned")
 			c.Abort()
 			return
 		}
@@ -79,7 +80,9 @@ func RequireRole(requiredRoles ...string) gin.HandlerFunc {
 		}
 
 		if !hasRole {
-			utils.ErrorResponse(c, http.StatusForbidden, "Insufficient permissions")
+			utils.ErrorResponse(c, http.StatusForbidden,
+				fmt.Sprintf("Access denied: this action requires the %s role",
+					strings.Join(requiredRoles, " or ")))
 			c.Abort()
 			return
 		}
@@ -109,7 +112,7 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 		}
 
 		if len(userRoles) == 0 {
-			utils.ErrorResponse(c, http.StatusForbidden, "User has no roles")
+			utils.ErrorResponse(c, http.StatusForbidden, "Access denied: your account has no role assigned")
 			c.Abort()
 			return
 		}
@@ -157,7 +160,10 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 		if err := config.DB.Where("route_path = ? AND deleted_at IS NULL", basePath).First(&menu).Error; err != nil {
 			// Menu tidak terdaftar = akses ditolak
 			// Semua endpoint wajib didaftarkan di tabel menus
-			utils.ErrorResponse(c, http.StatusForbidden, "Access denied: route not registered in menu")
+			// Bukan salah user: endpoint-nya yang belum didaftarkan sebagai menu.
+			// Path-nya disebut supaya admin tahu baris mana yang harus dibuat.
+			utils.ErrorResponse(c, http.StatusForbidden,
+				fmt.Sprintf("Access denied: route %s is not registered as a menu, please contact the administrator", basePath))
 			c.Abort()
 			return
 		}
@@ -171,7 +177,8 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 		}
 
 		if len(roleMenus) == 0 {
-			utils.ErrorResponse(c, http.StatusForbidden, "No permissions for this menu")
+			utils.ErrorResponse(c, http.StatusForbidden,
+				fmt.Sprintf("Access denied: your role has no access to %s — ask the administrator to grant it", menu.Name))
 			c.Abort()
 			return
 		}
@@ -194,7 +201,14 @@ func RequirePermission(requiredPermissions ...string) gin.HandlerFunc {
 		}
 
 		if !hasPermission {
-			utils.ErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Insufficient permissions: required %v", requiredPermissions))
+			// Sebutkan izin yang kurang sekaligus yang sudah dimiliki, supaya admin
+			// langsung tahu kotak mana yang perlu dicentang di halaman role.
+			utils.ErrorResponse(c, http.StatusForbidden,
+				fmt.Sprintf("Access denied: %s requires %s permission on %s, your role only has %s",
+					menu.Name,
+					strings.Join(requiredPermissions, " or "),
+					basePath,
+					describePermissions(userPermissions)))
 			c.Abort()
 			return
 		}
@@ -265,4 +279,18 @@ func OptionalAuth() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// describePermissions merangkum izin yang dimiliki user pada satu menu untuk
+// ditampilkan di pesan error.
+func describePermissions(permissions map[string]bool) string {
+	if len(permissions) == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(permissions))
+	for name := range permissions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }

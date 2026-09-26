@@ -16,6 +16,8 @@ const (
 	StageGR                = "GR"
 	StageFinished          = "FINISHED"
 	StageRejected          = "REJECTED"
+	// CANCELLED — dibatalkan oleh pengaju sendiri, bukan ditolak approver
+	StageCancelled = "CANCELLED"
 )
 
 // Stage Actions

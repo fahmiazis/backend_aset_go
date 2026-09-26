@@ -51,7 +51,7 @@ CREATE TABLE disposal_agreement_items (
 -- (/api/v1/transactions/disposal-agreements → /transactions/disposal-agreements).
 INSERT INTO menus (id, parent_id, name, menu_type, path, route_path, order_index, status, created_at, updated_at)
 SELECT UUID(), NULL, 'Disposal Agreement', 'permission',
-       '/dashboard/disposal/agreement', '/transactions/disposal-agreements',
+       '/dashboard/disposal-agreement', '/transactions/disposal-agreements',
        0, 'active', NOW(), NOW()
 WHERE NOT EXISTS (
     SELECT 1 FROM (SELECT * FROM menus) m

@@ -42,6 +42,8 @@ type ProcurementItemResponse struct {
 	TotalPrice        float64                     `json:"total_price"`
 	BranchCode        string                      `json:"branch_code"`
 	Notes             *string                     `json:"notes"`
+	NeedsRevision     bool                        `json:"needs_revision"`
+	RevisionNotes     *string                     `json:"revision_notes"`
 	CreatedAt         time.Time                   `json:"created_at"`
 	UpdatedAt         time.Time                   `json:"updated_at"`
 	Details           []ProcurementDetailResponse `json:"details,omitempty"`

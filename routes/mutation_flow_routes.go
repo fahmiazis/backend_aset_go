@@ -73,6 +73,12 @@ func SetupMutationFlowRoutes(rg *gin.RouterGroup) {
 			controllers.ExecuteMutation)
 
 		// POST /transactions/mutation/reject?transaction_number → REJECTED
+		// Tanpa RequirePermission — otorisasinya melekat pada transaksi:
+		// revisi hanya untuk approver step berjalan, pembatalan hanya untuk
+		// pembuatnya. Dua-duanya diperiksa di service.
+		mutation.POST("/approval/revise", controllers.ReturnMutationForRevision)
+		mutation.POST("/cancel", controllers.CancelMutation)
+
 		mutation.POST("/reject",
 			middleware.RequirePermission("reject_transaction"),
 			controllers.RejectMutation)
@@ -93,5 +99,10 @@ func SetupMutationFlowRoutes(rg *gin.RouterGroup) {
 			controllers.ReviewMutationAttachment)
 
 		mutation.GET("/attachments/status", controllers.GetMutationAttachmentStatus)
+
+		// GET /transactions/mutation/attachments/:id/file[?download=1]
+		// Stream file untuk preview & unduh. Tidak dilayani sebagai file statis
+		// supaya tetap lewat autentikasi.
+		mutation.GET("/attachments/:id/file", controllers.GetMutationAttachmentFile)
 	}
 }

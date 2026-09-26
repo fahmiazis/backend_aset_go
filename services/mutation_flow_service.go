@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -303,14 +304,10 @@ func SubmitMutation(userID string, transactionNumber string, req dto.SubmitMutat
 		return nil, errors.New("cannot submit mutation with no assets")
 	}
 
-	// Cek attachment semua asset sebelum submit
-	allAttachmentOK, err := checkAllMutationAttachments(transactionNumber, transaction.ID, models.StageDraft)
-	if err != nil {
-		return nil, err
-	}
-	if !allAttachmentOK {
-		return nil, errors.New("not all required attachments are approved for all assets")
-	}
+	// Sengaja tidak ada pemeriksaan dokumen di sini: dokumen mutasi adalah
+	// dokumen serah terima yang baru diunggah cabang tujuan pada stage
+	// MUTATION_RECEIVING, jadi tidak mungkin sudah ada saat pengaju submit.
+	// Pemeriksaannya dilakukan di ConfirmMutationReceiving.
 
 	tx := config.DB.Begin()
 	defer func() {
@@ -325,6 +322,17 @@ func SubmitMutation(userID string, transactionNumber string, req dto.SubmitMutat
 		return nil, err
 	}
 
+
+	// Revisi dianggap selesai begitu transaksi disubmit ulang
+	if err := tx.Model(&models.TransactionMutationAsset{}).
+		Where("transaction_id = ?", transaction.ID).
+		Updates(map[string]interface{}{
+			"needs_revision": false,
+			"revision_notes": nil,
+		}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	if err := recordStage(tx, transaction.ID, transactionNumber,
 		fromStage, models.StageApproval,
 		models.ActionSubmit, userID, nil, req.Notes); err != nil {
@@ -571,6 +579,8 @@ func GetMutationDetail(transactionNumber string) (*dto.MutationDetailResponse, e
 			DocumentNumber:    ma.DocumentNumber,
 			Notes:             ma.Notes,
 			Status:            ma.Status,
+			NeedsRevision:     ma.NeedsRevision,
+			RevisionNotes:     ma.RevisionNotes,
 			CreatedAt:         ma.CreatedAt,
 			UpdatedAt:         ma.UpdatedAt,
 		}
@@ -751,7 +761,7 @@ func UploadMutationAttachment(
 
 	// Buat direktori
 	dirPath := filepath.Join(
-		AttachmentStoragePath,
+		AttachmentStorageRoot(),
 		"mutation",
 		sanitizePathSegment(transactionNumber),
 		mutationAsset.AssetNumber,
@@ -823,6 +833,12 @@ func ReviewMutationAttachment(reviewerID string, attachmentID uint, req dto.Revi
 		return nil, errors.New("only PENDING attachments can be reviewed")
 	}
 
+	// Pengunggah tidak boleh menilai dokumennya sendiri — review dokumen adalah
+	// kontrol terpisah dari pengunggahan, jadi harus dilakukan orang lain.
+	if attachment.UploadedBy == reviewerID {
+		return nil, errors.New("you cannot review a document you uploaded yourself")
+	}
+
 	now := time.Now()
 	updates := map[string]interface{}{
 		"status":      req.Status,
@@ -842,6 +858,31 @@ func ReviewMutationAttachment(reviewerID string, attachmentID uint, req dto.Revi
 	return &response, nil
 }
 
+// GetMutationAttachmentFile mengembalikan baris attachment beserta path
+// absolutnya untuk di-stream. Path-nya ditulis server saat upload, tapi tetap
+// dipastikan tidak keluar dari folder penyimpanan sebelum dibuka.
+func GetMutationAttachmentFile(attachmentID uint) (*models.TransactionMutationAttachment, string, error) {
+	var att models.TransactionMutationAttachment
+	if err := config.DB.First(&att, attachmentID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, "", errors.New("attachment not found")
+		}
+		return nil, "", err
+	}
+
+	cleanPath := filepath.Clean(att.FilePath)
+	storageRoot := AttachmentStorageRoot()
+	if !strings.HasPrefix(cleanPath, storageRoot+string(os.PathSeparator)) {
+		return nil, "", errors.New("invalid attachment path")
+	}
+
+	if _, err := os.Stat(cleanPath); err != nil {
+		return nil, "", errors.New("attachment file is missing on the server")
+	}
+
+	return &att, cleanPath, nil
+}
+
 func GetMutationAttachmentStatus(transactionNumber string, transactionID uint) (*dto.MutationAllAttachmentStatus, error) {
 	var mutationAssets []models.TransactionMutationAsset
 	config.DB.
@@ -852,8 +893,12 @@ func GetMutationAttachmentStatus(transactionNumber string, transactionID uint) (
 	assetStatuses := make([]dto.MutationAttachmentStatusSummary, 0, len(mutationAssets))
 
 	for _, ma := range mutationAssets {
-		// Get required configs untuk mutation
-		requiredConfigs, err := getRequiredConfigs(TxMutationFlow, models.StageDraft, ma.FromBranchCode)
+		// Dokumen mutasi adalah dokumen serah terima, yang dikonfigurasi pada
+		// stage MUTATION_RECEIVING dan diunggah cabang tujuan. Sebelumnya di sini
+		// dipakai StageDraft, sehingga tidak ada config yang cocok, total_required
+		// selalu 0, dan pemeriksaan kelengkapan dokumen tidak pernah menolak apa
+		// pun. Cabang yang dipakai juga cabang tujuan, bukan cabang asal.
+		requiredConfigs, err := getRequiredConfigs(TxMutationFlow, models.StageMutationReceiving, ma.ToBranchCode)
 		if err != nil {
 			return nil, err
 		}
@@ -921,31 +966,15 @@ func GetMutationAttachmentStatus(transactionNumber string, transactionID uint) (
 // HELPERS
 // ============================================================
 
-func checkAllMutationAttachments(transactionNumber string, transactionID uint, stage string) (bool, error) {
+// checkAllMutationAttachments memastikan dokumen serah terima seluruh aset
+// sudah disetujui. Dipakai saat cabang tujuan mengonfirmasi penerimaan —
+// satu-satunya titik di alur mutasi yang mensyaratkan dokumen.
+func checkAllMutationAttachments(transactionNumber string, transactionID uint) (bool, error) {
 	status, err := GetMutationAttachmentStatus(transactionNumber, transactionID)
 	if err != nil {
 		return false, err
 	}
 
-	isDraft := stage == models.StageDraft
-
-	if isDraft {
-		// Di DRAFT: cukup semua required sudah diupload (PENDING atau APPROVED)
-		// REJECTED tidak boleh
-		for _, asset := range status.Assets {
-			if asset.TotalRejected > 0 {
-				return false, nil
-			}
-			// Cek missing = total required - (approved + pending)
-			uploaded := asset.TotalApproved + asset.TotalPending
-			if uploaded < asset.TotalRequired {
-				return false, nil
-			}
-		}
-		return true, nil
-	}
-
-	// Stage lain: semua wajib APPROVED
 	return status.AllCanProceed, nil
 }
 
@@ -1003,7 +1032,7 @@ func ConfirmMutationReceiving(userID string, transactionNumber string, notes *st
 	}
 
 	// Cek semua attachment serah terima sudah diupload dan approved
-	allAttachmentOK, err := checkAllMutationAttachments(transactionNumber, transaction.ID, models.StageMutationReceiving)
+	allAttachmentOK, err := checkAllMutationAttachments(transactionNumber, transaction.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -121,17 +121,40 @@ func recordStage(tx *gorm.DB, transactionID uint, transactionNumber, fromStage, 
 	return tx.Create(&stage).Error
 }
 
-// stageToStatus mapping stage ke status transaksi
+// stageToStatus memetakan stage ke status transaksi.
+//
+// Mencakup KETIGA flow. Stage yang tidak terdaftar jatuh ke fallback DRAFT di
+// updateTransactionStage — dan itulah yang dulu terjadi pada seluruh stage
+// disposal dan mutasi di luar DRAFT/APPROVAL/FINISHED: statusnya tertulis
+// DRAFT walaupun transaksinya sudah berjalan jauh.
+//
+// Beberapa stage bernama sama antar flow (DRAFT, APPROVAL, FINISHED,
+// REJECTED, CANCELLED) dan memang berarti hal yang sama, jadi cukup satu
+// entri.
 var stageToStatus = map[string]string{
+	// umum / procurement
 	models.StageDraft:             models.TransactionStatusDraft,
-	models.StageAssetVerification: "PENDING",
-	models.StageApproval:          "PENDING",
-	models.StageProcessBudget:     "PROCESSING",
-	models.StageExecuteAsset:      "PROCESSING",
-	models.StageGR:                "PROCESSING",
+	models.StageAssetVerification: models.TransactionStatusPending,
+	models.StageApproval:          models.TransactionStatusPending,
+	models.StageProcessBudget:     models.TransactionStatusProcessing,
+	models.StageExecuteAsset:      models.TransactionStatusProcessing,
+	models.StageGR:                models.TransactionStatusProcessing,
 	models.StageFinished:          models.TransactionStatusApproved,
 	models.StageRejected:          models.TransactionStatusRejected,
-	models.StageDisposalCancelled: models.TransactionStatusCancelled,
+	models.StageCancelled:         models.TransactionStatusCancelled,
+
+	// disposal
+	models.StageDisposalPurchasing:        models.TransactionStatusProcessing,
+	models.StageDisposalApprovalRequest:   models.TransactionStatusPending,
+	models.StageDisposalApprovalAgreement: models.TransactionStatusPending,
+	models.StageDisposalExecute:           models.TransactionStatusProcessing,
+	models.StageDisposalFinance:           models.TransactionStatusProcessing,
+	models.StageDisposalTax:               models.TransactionStatusProcessing,
+	models.StageDisposalAssetDeletion:     models.TransactionStatusProcessing,
+
+	// mutation
+	models.StageMutationReceiving: models.TransactionStatusProcessing,
+	models.StageMutationExecute:   models.TransactionStatusProcessing,
 }
 
 // updateTransactionStage update current_stage & status di tabel transactions

@@ -293,6 +293,9 @@ func GetProcurementDetailWithStage(c *gin.Context) {
 		return
 	}
 
+	result.WaitingForMe = services.IsProcurementWaitingForUser(
+		c.GetString("user_id"), transactionNumber)
+
 	utils.SuccessResponse(c, http.StatusOK, "Procurement detail retrieved successfully", result)
 }
 
@@ -315,4 +318,52 @@ func GetProcurementApprovalStatus(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "Approval status retrieved successfully", result)
+}
+
+// ReturnProcurementForRevision — approver mengembalikan pengajuan ke DRAFT
+func ReturnProcurementForRevision(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.ReturnForRevisionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.ReturnProcurementForRevision(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Procurement returned for revision", result)
+}
+
+// CancelProcurement — pembatalan oleh pengaju sendiri
+func CancelProcurement(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.CancelTransactionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.CancelProcurement(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Procurement cancelled successfully", result)
 }

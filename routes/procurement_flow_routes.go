@@ -60,6 +60,14 @@ func SetupProcurementFlowRoutes(rg *gin.RouterGroup) {
 			controllers.CreateAssetGR)
 
 		// REJECT
+		// Tanpa RequirePermission, sama dengan revise/cancel disposal:
+		// otorisasinya melekat pada transaksi, bukan pada menu. Revisi hanya
+		// untuk approver step yang SEDANG berjalan, pembatalan hanya untuk
+		// pembuatnya — dua-duanya diperiksa di service dan tidak bisa
+		// diungkapkan sebagai permission menu.
+		procurement.POST("/approval/revise", controllers.ReturnProcurementForRevision)
+		procurement.POST("/cancel", controllers.CancelProcurement)
+
 		procurement.POST("/reject",
 			middleware.RequirePermission("reject_transaction"),
 			controllers.RejectProcurement)

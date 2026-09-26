@@ -15,6 +15,10 @@ type TransactionProcurement struct {
 	TotalPrice        float64   `gorm:"type:decimal(18,2);not null;default:0" json:"total_price"`
 	BranchCode        string    `gorm:"size:50;index" json:"branch_code"`
 	Notes             *string   `gorm:"type:text" json:"notes"` // NULLABLE - FIXED!
+	// Ditandai approver saat meminta revisi. Selama masih true, hanya baris
+	// inilah yang boleh diubah pengaju; dibersihkan saat submit ulang.
+	NeedsRevision bool    `gorm:"not null;default:false;index" json:"needs_revision"`
+	RevisionNotes *string `gorm:"type:text" json:"revision_notes"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 

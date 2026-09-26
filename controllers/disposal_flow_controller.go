@@ -46,6 +46,9 @@ func GetDisposalDetail(c *gin.Context) {
 		return
 	}
 
+	result.WaitingForMe = services.IsDisposalWaitingForUser(
+		c.GetString("user_id"), transactionNumber)
+
 	utils.SuccessResponse(c, http.StatusOK, "Disposal detail retrieved successfully", result)
 }
 
@@ -56,6 +59,10 @@ func GetAllDisposals(c *gin.Context) {
 	filter := dto.DisposalListFilter{
 		Page:  page,
 		Limit: limit,
+		// dibaca dari token, bukan query — supaya tidak bisa mengintip
+		// daftar tugas user lain
+		ViewerUserID: c.GetString("user_id"),
+		WaitingForMe: c.Query("waiting_for_me") == "true",
 	}
 
 	if v := c.Query("disposal_type"); v != "" {
@@ -69,6 +76,9 @@ func GetAllDisposals(c *gin.Context) {
 	}
 	if v := c.Query("created_by"); v != "" {
 		filter.CreatedBy = &v
+	}
+	if v := c.Query("search"); v != "" {
+		filter.Search = &v
 	}
 	if v := c.Query("start_date"); v != "" {
 		filter.StartDate = &v
@@ -183,6 +193,54 @@ func SetDisposalSaleValues(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "Sale values set successfully", result)
+}
+
+// SetDisposalIncomeValues — FINANCE, isi nilai pemasukan per aset
+func SetDisposalIncomeValues(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.SetDisposalIncomeValueRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.SetDisposalIncomeValues(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Income values saved successfully", result)
+}
+
+// SetDisposalInvoices — TAX, isi nomor & tanggal faktur per aset
+func SetDisposalInvoices(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.SetDisposalInvoiceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.SetDisposalInvoices(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Invoice data saved successfully", result)
 }
 
 func InitiateDisposalApprovalRequest(c *gin.Context) {

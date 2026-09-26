@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend-go/config"
 	"backend-go/dto"
 	"backend-go/models"
 )
@@ -9,6 +10,31 @@ import (
 // TRANSACTION MAPPERS
 // FIX: hapus strconv, ID sudah uint. Hapus Creator/Approver relation (tidak ada di model).
 // ============================================================================
+
+// transactionNeedsRevision cek apakah ada baris transaksi yang ditandai
+// approver perlu diperbaiki.
+//
+// Tabel barisnya berbeda per tipe transaksi, jadi dipilih di sini. Query-nya
+// EXISTS, bukan memuat seluruh baris — daftar hanya perlu tahu ada/tidak.
+func transactionNeedsRevision(transactionID uint, transactionType string) bool {
+	var table string
+	switch transactionType {
+	case TxProcurement:
+		table = "transaction_procurements"
+	case TxMutationFlow:
+		table = "transaction_mutation_assets"
+	case TxDisposalFlow:
+		table = "transaction_disposal_assets"
+	default:
+		return false
+	}
+
+	var count int64
+	config.DB.Table(table).
+		Where("transaction_id = ? AND needs_revision = ?", transactionID, true).
+		Count(&count)
+	return count > 0
+}
 
 func mapTransactionHeaderToResponse(tx models.Transaction) dto.TransactionHeaderResponse {
 	return dto.TransactionHeaderResponse{
@@ -23,6 +49,7 @@ func mapTransactionHeaderToResponse(tx models.Transaction) dto.TransactionHeader
 		CreatedByName:     resolveUserFullname(tx.CreatedBy),
 		ApprovedBy:        tx.ApprovedBy,
 		ApprovedAt:        tx.ApprovedAt,
+		NeedsRevision:     transactionNeedsRevision(tx.ID, tx.TransactionType),
 		CreatedAt:         tx.CreatedAt,
 		UpdatedAt:         tx.UpdatedAt,
 	}
@@ -49,6 +76,7 @@ func mapTransactionHeadersToResponse(transactions []models.Transaction) []dto.Tr
 			CreatedBy:         tx.CreatedBy,
 			ApprovedBy:        tx.ApprovedBy,
 			ApprovedAt:        tx.ApprovedAt,
+			NeedsRevision:     transactionNeedsRevision(tx.ID, tx.TransactionType),
 			CreatedAt:         tx.CreatedAt,
 			UpdatedAt:         tx.UpdatedAt,
 		}
@@ -77,6 +105,8 @@ func mapProcurementItemToResponse(item models.TransactionProcurement) dto.Procur
 		TotalPrice:        item.TotalPrice,
 		BranchCode:        item.BranchCode,
 		Notes:             item.Notes,
+		NeedsRevision:     item.NeedsRevision,
+		RevisionNotes:     item.RevisionNotes,
 		CreatedAt:         item.CreatedAt,
 		UpdatedAt:         item.UpdatedAt,
 	}

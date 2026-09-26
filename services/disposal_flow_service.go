@@ -419,7 +419,9 @@ func SubmitDisposal(userID string, transactionNumber string, req dto.SubmitDispo
 	if initiateApproval {
 		if err := InitiateDisposalApprovalRequest(userID, transactionNumber,
 			dto.InitiateDisposalApprovalRequest{}); err != nil {
-			return nil, fmt.Errorf("disposal submitted but approval initiation failed: %w", err)
+			return nil, fmt.Errorf(
+				"disposal submitted and the transaction already moved to %s, but the approval could not be created: %w — retry from the approval request action on the detail page",
+				models.StageDisposalApprovalRequest, err)
 		}
 	}
 
@@ -509,7 +511,12 @@ func SetDisposalSaleValues(userID string, transactionNumber string, req dto.SetD
 
 	if err := InitiateDisposalApprovalRequest(userID, transactionNumber,
 		dto.InitiateDisposalApprovalRequest{}); err != nil {
-		return nil, fmt.Errorf("sale values saved but approval initiation failed: %w", err)
+		// Stage sudah terlanjur pindah ke APPROVAL_REQUEST di transaksi yang
+		// sudah commit, jadi endpoint ini tidak bisa dipakai ulang. Sebutkan
+		// jalan keluarnya supaya transaksi tidak terlihat buntu.
+		return nil, fmt.Errorf(
+			"sale values saved and the transaction already moved to %s, but the approval could not be created: %w — retry from the approval request action on the detail page",
+			models.StageDisposalApprovalRequest, err)
 	}
 
 	return GetDisposalDetail(transactionNumber)
@@ -821,33 +828,7 @@ func assertAssetRevisable(transactionID uint, disposalAssetID uint) error {
 // currentPendingApproval mengambil baris approval yang sedang menunggu
 // (step pending pertama) untuk flow disposal mana pun pada transaksi ini.
 func currentPendingApproval(transactionNumber string) (*models.TransactionApproval, error) {
-	var approvals []models.TransactionApproval
-	if err := config.DB.
-		Preload("ApprovalFlowStep").
-		Where("transaction_number = ? AND transaction_type = ? AND status = ?",
-			transactionNumber, TxDisposalFlow, "pending").
-		Find(&approvals).Error; err != nil {
-		return nil, err
-	}
-
-	if len(approvals) == 0 {
-		return nil, errors.New("no pending approval found for this transaction")
-	}
-
-	// urutkan berdasarkan step_order — kolomnya ada di tabel lain, jadi
-	// pengurutannya dilakukan setelah fetch (sama seperti
-	// GetTransactionApprovalStatus)
-	current := approvals[0]
-	for _, item := range approvals[1:] {
-		if item.ApprovalFlowStep == nil || current.ApprovalFlowStep == nil {
-			continue
-		}
-		if item.ApprovalFlowStep.StepOrder < current.ApprovalFlowStep.StepOrder {
-			current = item
-		}
-	}
-
-	return &current, nil
+	return currentPendingApprovalFor(transactionNumber, TxDisposalFlow)
 }
 
 // ReviseDisposal mengembalikan transaksi ke DRAFT supaya pembuatnya bisa
@@ -1077,6 +1058,11 @@ func ConfirmDisposalFinance(userID string, transactionNumber string, req dto.Con
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageDisposalFinance)
 	}
 
+	// Nilai pemasukan diisi per aset lebih dulu; konfirmasi hanya meneruskan.
+	if err := assertAllDisposalAssetsHaveIncome(transaction.ID); err != nil {
+		return nil, err
+	}
+
 	branchCode := GetCreatorBranchCode(transaction.CreatedBy)
 
 	// Cek attachment DRAFT sudah semua APPROVED
@@ -1143,6 +1129,11 @@ func ConfirmDisposalTax(userID string, transactionNumber string, req dto.Confirm
 
 	if transaction.CurrentStage != models.StageDisposalTax {
 		return nil, fmt.Errorf("transaction is not in %s stage", models.StageDisposalTax)
+	}
+
+	// Data faktur diisi per aset lebih dulu; konfirmasi hanya meneruskan.
+	if err := assertAllDisposalAssetsHaveInvoice(transaction.ID); err != nil {
+		return nil, err
 	}
 
 	branchCode := GetCreatorBranchCode(transaction.CreatedBy)
@@ -1230,6 +1221,8 @@ func ConfirmDisposalAssetDeletion(userID string, transactionNumber string, req d
 		}
 	}()
 
+	deletionDate := time.Now()
+
 	for _, da := range disposalAssets {
 		// Generate document number per asset
 		docNumber, err := GenerateDocumentNumber(tx)
@@ -1247,15 +1240,21 @@ func ConfirmDisposalAssetDeletion(userID string, transactionNumber string, req d
 			return nil, err
 		}
 
-		// Asset status → DISPOSED, asset_value → 0
+		// Asset status → DISPOSED
 		if err := tx.Model(&models.Asset{}).
 			Where("id = ?", da.AssetID).
-			Updates(map[string]interface{}{
-				"asset_status": models.AssetStatusDisposed,
-				"asset_value":  0,
-			}).Error; err != nil {
+			Update("asset_status", models.AssetStatusDisposed).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to update asset status: %w", err)
+		}
+
+		// Nilai aset di-write-off: baris asset_values aktif dinonaktifkan, lalu
+		// dibuat baris baru dengan book_value 0 dan seluruh nilai perolehan masuk
+		// ke akumulasi penyusutan (acquisition - accumulated = book tetap konsisten).
+		// Pola ini sama dengan CalculateMonthlyDepreciation.
+		if err := writeOffAssetValue(tx, da.AssetID, deletionDate); err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to write off asset value: %w", err)
 		}
 	}
 
@@ -1279,6 +1278,234 @@ func ConfirmDisposalAssetDeletion(userID string, transactionNumber string, req d
 	}
 
 	return GetDisposalDetail(transactionNumber)
+}
+
+// writeOffAssetValue menutup nilai buku aset yang dihapus. Baris asset_values
+// aktif dinonaktifkan, lalu dibuat baris baru bernilai 0. Kalau aset belum
+// pernah punya baris nilai, tidak ada yang perlu ditulis.
+func writeOffAssetValue(tx *gorm.DB, assetID uint, effectiveDate time.Time) error {
+	var current models.AssetValue
+	err := tx.Where("asset_id = ? AND is_active = ?", assetID, true).
+		Order("effective_date DESC, id DESC").
+		First(&current).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Model(&models.AssetValue{}).
+		Where("asset_id = ? AND is_active = ?", assetID, true).
+		Update("is_active", false).Error; err != nil {
+		return err
+	}
+
+	disposed := models.AssetStatusDisposed
+	return tx.Create(&models.AssetValue{
+		AssetID:                 assetID,
+		EffectiveDate:           effectiveDate,
+		BookValue:               0,
+		AcquisitionValue:        current.AcquisitionValue,
+		AccumulatedDepreciation: current.AcquisitionValue,
+		Condition:               current.Condition,
+		PhysicalStatus:          current.PhysicalStatus,
+		AssetStatus:             &disposed,
+		IsActive:                true,
+	}).Error
+}
+
+// ============================================================
+// FINANCE / TAX — isi data per aset
+//
+// Terpisah dari konfirmasi stage: mengisi nilai tidak memindahkan transaksi,
+// sehingga user bisa menyicil pengisian dan baru meneruskan setelah yakin
+// semuanya benar.
+// ============================================================
+
+// disposalAssetsForStage mengambil aset aktif sebuah transaksi disposal dan
+// memastikan stage-nya sesuai yang diharapkan.
+func disposalAssetsForStage(transactionNumber, expectedStage string) (*models.Transaction, []models.TransactionDisposalAsset, error) {
+	transaction, err := getDisposalTransaction(transactionNumber)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if transaction.DisposalType == nil || *transaction.DisposalType != models.DisposalTypeSell {
+		return nil, nil, fmt.Errorf("%s stage is only for SELL disposals", expectedStage)
+	}
+
+	if transaction.CurrentStage != expectedStage {
+		return nil, nil, fmt.Errorf("transaction is not in %s stage", expectedStage)
+	}
+
+	var assets []models.TransactionDisposalAsset
+	if err := config.DB.
+		Where("transaction_id = ? AND status = ?", transaction.ID, models.DisposalAssetStatusPending).
+		Find(&assets).Error; err != nil {
+		return nil, nil, err
+	}
+
+	if len(assets) == 0 {
+		return nil, nil, errors.New("no active assets found in this disposal")
+	}
+
+	return transaction, assets, nil
+}
+
+// SetDisposalIncomeValues — FINANCE, isi nilai pemasukan per aset.
+func SetDisposalIncomeValues(userID string, transactionNumber string, req dto.SetDisposalIncomeValueRequest) (*dto.DisposalDetailResponse, error) {
+	transaction, assets, err := disposalAssetsForStage(transactionNumber, models.StageDisposalFinance)
+	if err != nil {
+		return nil, err
+	}
+
+	allowed := make(map[uint]bool, len(assets))
+	for _, asset := range assets {
+		allowed[asset.ID] = true
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for _, item := range req.Assets {
+		if !allowed[item.DisposalAssetID] {
+			tx.Rollback()
+			return nil, fmt.Errorf("asset %d does not belong to this disposal", item.DisposalAssetID)
+		}
+		if item.IncomeValue <= 0 {
+			tx.Rollback()
+			return nil, fmt.Errorf("income value for asset %d must be greater than 0", item.DisposalAssetID)
+		}
+
+		if err := tx.Model(&models.TransactionDisposalAsset{}).
+			Where("id = ? AND transaction_id = ?", item.DisposalAssetID, transaction.ID).
+			Update("income_value", item.IncomeValue).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to set income value for asset %d: %w", item.DisposalAssetID, err)
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetDisposalDetail(transactionNumber)
+}
+
+// SetDisposalInvoices — TAX, isi nomor & tanggal faktur per aset.
+func SetDisposalInvoices(userID string, transactionNumber string, req dto.SetDisposalInvoiceRequest) (*dto.DisposalDetailResponse, error) {
+	transaction, assets, err := disposalAssetsForStage(transactionNumber, models.StageDisposalTax)
+	if err != nil {
+		return nil, err
+	}
+
+	allowed := make(map[uint]bool, len(assets))
+	for _, asset := range assets {
+		allowed[asset.ID] = true
+	}
+
+	// Semua baris divalidasi dulu sebelum ada yang ditulis, supaya satu tanggal
+	// yang salah format tidak meninggalkan sebagian aset sudah tersimpan.
+	type invoiceUpdate struct {
+		id     uint
+		number string
+		date   time.Time
+	}
+	updates := make([]invoiceUpdate, 0, len(req.Assets))
+
+	for _, item := range req.Assets {
+		if !allowed[item.DisposalAssetID] {
+			return nil, fmt.Errorf("asset %d does not belong to this disposal", item.DisposalAssetID)
+		}
+
+		number := strings.TrimSpace(item.InvoiceNumber)
+		if number == "" {
+			return nil, fmt.Errorf("invoice number for asset %d is required", item.DisposalAssetID)
+		}
+
+		date, err := time.Parse("2006-01-02", strings.TrimSpace(item.InvoiceDate))
+		if err != nil {
+			return nil, fmt.Errorf("invoice date for asset %d must be a valid date (YYYY-MM-DD)", item.DisposalAssetID)
+		}
+
+		updates = append(updates, invoiceUpdate{id: item.DisposalAssetID, number: number, date: date})
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for _, item := range updates {
+		if err := tx.Model(&models.TransactionDisposalAsset{}).
+			Where("id = ? AND transaction_id = ?", item.id, transaction.ID).
+			Updates(map[string]interface{}{
+				"invoice_number": item.number,
+				"invoice_date":   item.date,
+			}).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to set invoice for asset %d: %w", item.id, err)
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetDisposalDetail(transactionNumber)
+}
+
+// assertAllDisposalAssetsHaveIncome menolak konfirmasi finance selama masih
+// ada aset aktif yang nilai pemasukannya kosong.
+func assertAllDisposalAssetsHaveIncome(transactionID uint) error {
+	var missing []string
+	var assets []models.TransactionDisposalAsset
+	if err := config.DB.
+		Where("transaction_id = ? AND status = ?", transactionID, models.DisposalAssetStatusPending).
+		Find(&assets).Error; err != nil {
+		return err
+	}
+
+	for _, asset := range assets {
+		if asset.IncomeValue == nil || *asset.IncomeValue <= 0 {
+			missing = append(missing, asset.AssetNumber)
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("income value is not filled for: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// assertAllDisposalAssetsHaveInvoice menolak konfirmasi pajak selama masih ada
+// aset aktif yang data fakturnya kosong.
+func assertAllDisposalAssetsHaveInvoice(transactionID uint) error {
+	var missing []string
+	var assets []models.TransactionDisposalAsset
+	if err := config.DB.
+		Where("transaction_id = ? AND status = ?", transactionID, models.DisposalAssetStatusPending).
+		Find(&assets).Error; err != nil {
+		return err
+	}
+
+	for _, asset := range assets {
+		if asset.InvoiceNumber == nil || strings.TrimSpace(*asset.InvoiceNumber) == "" || asset.InvoiceDate == nil {
+			missing = append(missing, asset.AssetNumber)
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("invoice data is not filled for: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // ============================================================
@@ -1471,6 +1698,9 @@ func GetDisposalDetail(transactionNumber string) (*dto.DisposalDetailResponse, e
 			DisposalType:      da.DisposalType,
 			DisposalReason:    da.DisposalReason,
 			SaleValue:         da.SaleValue,
+			IncomeValue:       da.IncomeValue,
+			InvoiceNumber:     da.InvoiceNumber,
+			InvoiceDate:       da.InvoiceDate,
 			DocumentNumber:    da.DocumentNumber,
 			Notes:             da.Notes,
 			Status:            da.Status,
@@ -1534,11 +1764,48 @@ func GetAllDisposals(filter dto.DisposalListFilter) ([]dto.DisposalDetailRespons
 	if filter.Status != nil {
 		query = query.Where("status = ?", *filter.Status)
 	}
-	if filter.CurrentStage != nil {
-		query = query.Where("current_stage = ?", *filter.CurrentStage)
+	if filter.CurrentStage != nil && *filter.CurrentStage != "" {
+		// Menerima beberapa stage sekaligus, dipisah koma. Dipakai tab di
+		// halaman daftar yang mengelompokkan stage berdasarkan tahap kerja,
+		// mis. "menunggu persetujuan" mencakup APPROVAL_REQUEST dan
+		// APPROVAL_AGREEMENT.
+		stages := strings.Split(*filter.CurrentStage, ",")
+		cleaned := make([]string, 0, len(stages))
+		for _, stage := range stages {
+			if trimmed := strings.TrimSpace(stage); trimmed != "" {
+				cleaned = append(cleaned, trimmed)
+			}
+		}
+
+		if len(cleaned) == 1 {
+			query = query.Where("current_stage = ?", cleaned[0])
+		} else if len(cleaned) > 1 {
+			query = query.Where("current_stage IN ?", cleaned)
+		}
 	}
 	if filter.CreatedBy != nil {
 		query = query.Where("created_by = ?", *filter.CreatedBy)
+	}
+	if filter.Search != nil && strings.TrimSpace(*filter.Search) != "" {
+		keyword := "%" + strings.TrimSpace(*filter.Search) + "%"
+
+		// Aset dicari lewat subquery, bukan JOIN, supaya satu transaksi tidak
+		// muncul berkali-kali ketika beberapa asetnya cocok.
+		assetMatches := config.DB.
+			Model(&models.TransactionDisposalAsset{}).
+			Select("transaction_id").
+			Joins("LEFT JOIN assets ON assets.id = transaction_disposal_assets.asset_id").
+			Where("transaction_disposal_assets.asset_number LIKE ? OR assets.asset_name LIKE ?",
+				keyword, keyword)
+
+		query = query.Where(
+			config.DB.Where("transaction_number LIKE ?", keyword).
+				Or("notes LIKE ?", keyword).
+				Or("id IN (?)", assetMatches),
+		)
+	}
+	if filter.WaitingForMe && filter.ViewerUserID != "" {
+		query = applyDisposalWaitingFilter(query, filter.ViewerUserID)
 	}
 	if filter.StartDate != nil {
 		query = query.Where("transaction_date >= ?", *filter.StartDate)
@@ -1606,6 +1873,20 @@ func UploadDisposalAttachment(
 		return nil, err
 	}
 
+	// Dokumen stage DRAFT dan EXECUTE adalah tanggung jawab pembuat transaksi
+	// (lihat komentar alur: "EXECUTE — creator upload dok penghapusan/hasil
+	// jual"). Tanpa pembatasan ini, siapa pun yang punya permission
+	// upload_attachment bisa mengunggah dokumen milik transaksi orang lain.
+	if stage == models.StageDisposalDraft || stage == models.StageDisposalExecute {
+		transaction, err := getDisposalTransaction(transactionNumber)
+		if err != nil {
+			return nil, err
+		}
+		if transaction.CreatedBy != userID {
+			return nil, fmt.Errorf("only the creator can upload %s documents for this transaction", stage)
+		}
+	}
+
 	// Validasi attachment config
 	var attachmentConfig models.AttachmentConfig
 	if err := config.DB.First(&attachmentConfig, configID).Error; err != nil {
@@ -1628,7 +1909,7 @@ func UploadDisposalAttachment(
 
 	// Buat direktori
 	dirPath := filepath.Join(
-		AttachmentStoragePath,
+		AttachmentStorageRoot(),
 		"disposal",
 		sanitizePathSegment(transactionNumber),
 		disposalAsset.AssetNumber,
@@ -1700,6 +1981,12 @@ func ReviewDisposalAttachment(reviewerID string, attachmentID uint, req dto.Revi
 
 	if attachment.Status != models.AttachmentStatusPending {
 		return nil, errors.New("only PENDING attachments can be reviewed")
+	}
+
+	// Pengunggah tidak boleh menilai dokumennya sendiri — review dokumen adalah
+	// kontrol terpisah dari pengunggahan, jadi harus dilakukan orang lain.
+	if attachment.UploadedBy == reviewerID {
+		return nil, errors.New("you cannot review a document you uploaded yourself")
 	}
 
 	now := time.Now()
@@ -1817,7 +2104,7 @@ func GetDisposalAttachmentFile(attachmentID uint) (*models.TransactionDisposalAt
 	// Path disimpan server saat upload, tapi tetap dipastikan tidak keluar dari
 	// folder penyimpanan sebelum dibuka.
 	cleanPath := filepath.Clean(att.FilePath)
-	storageRoot := filepath.Clean(AttachmentStoragePath)
+	storageRoot := AttachmentStorageRoot()
 	if !strings.HasPrefix(cleanPath, storageRoot+string(os.PathSeparator)) {
 		return nil, "", errors.New("invalid attachment path")
 	}

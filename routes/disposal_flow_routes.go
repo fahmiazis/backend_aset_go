@@ -104,6 +104,12 @@ func SetupDisposalFlowRoutes(rg *gin.RouterGroup) {
 
 		disposalFinance := disposal.Group("/finance")
 		{
+			// Mengisi nilai tidak memindahkan stage — pemakainya sama, jadi
+			// permission-nya juga sama dengan confirm.
+			disposalFinance.POST("/set-income-values",
+				middleware.RequirePermission("manage_finance"),
+				controllers.SetDisposalIncomeValues)
+
 			disposalFinance.POST("/confirm",
 				middleware.RequirePermission("manage_finance"),
 				controllers.ConfirmDisposalFinance)
@@ -116,6 +122,10 @@ func SetupDisposalFlowRoutes(rg *gin.RouterGroup) {
 
 		disposalTax := disposal.Group("/tax")
 		{
+			disposalTax.POST("/set-invoices",
+				middleware.RequirePermission("manage_tax"),
+				controllers.SetDisposalInvoices)
+
 			disposalTax.POST("/confirm",
 				middleware.RequirePermission("manage_tax"),
 				controllers.ConfirmDisposalTax)

@@ -54,6 +54,10 @@ func GetAllProcurements(c *gin.Context) {
 		filter.Limit = 10
 	}
 
+	// Diambil dari token, bukan query — kalau boleh dikirim client, siapa pun
+	// bisa mengintip daftar tugas orang lain.
+	filter.ViewerUserID = c.GetString("user_id")
+
 	procurements, total, err := services.GetAllProcurements(filter)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())

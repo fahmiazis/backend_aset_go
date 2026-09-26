@@ -66,6 +66,9 @@ uploads/*
 !uploads/documents/.gitkeep
 !uploads/avatars/.gitkeep
 
+# Dokumen attachment saat ATTACHMENT_STORAGE_PATH diarahkan ke dalam repo
+documents/
+
 # OS specific
 Thumbs.db
 .DS_Store

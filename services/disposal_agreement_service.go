@@ -277,7 +277,55 @@ func GetDisposalAgreementDetail(agreementNumber string) (*dto.DisposalAgreementR
 	response.Items = mapAgreementItems(transactions)
 	response.TotalItems = len(items)
 
+	assets, err := agreementAssets(transactions)
+	if err != nil {
+		return nil, err
+	}
+	response.Assets = assets
+	response.TotalAssets = len(assets)
+
 	return &response, nil
+}
+
+// agreementAssets meratakan aset dari seluruh transaksi anggota menjadi satu
+// daftar, masing-masing tetap membawa nomor transaksi asalnya.
+func agreementAssets(transactions []models.Transaction) ([]dto.DisposalAgreementAssetResponse, error) {
+	assets := make([]dto.DisposalAgreementAssetResponse, 0)
+
+	for _, trx := range transactions {
+		var disposalAssets []models.TransactionDisposalAsset
+		if err := config.DB.
+			Preload("Asset").
+			Preload("Asset.Category").
+			Where("transaction_id = ? AND status = ?", trx.ID, models.DisposalAssetStatusPending).
+			Find(&disposalAssets).Error; err != nil {
+			return nil, err
+		}
+
+		for _, da := range disposalAssets {
+			item := dto.DisposalAgreementAssetResponse{
+				DisposalAssetID:   da.ID,
+				AssetID:           da.AssetID,
+				AssetNumber:       da.AssetNumber,
+				DisposalType:      da.DisposalType,
+				DisposalReason:    da.DisposalReason,
+				SaleValue:         da.SaleValue,
+				TransactionNumber: da.TransactionNumber,
+			}
+
+			if da.Asset != nil {
+				item.AssetName = &da.Asset.AssetName
+				item.BranchCode = da.Asset.BranchCode
+				if da.Asset.Category != nil {
+					item.CategoryName = &da.Asset.Category.CategoryName
+				}
+			}
+
+			assets = append(assets, item)
+		}
+	}
+
+	return assets, nil
 }
 
 func GetAllDisposalAgreements(filter dto.DisposalAgreementListFilter) ([]dto.DisposalAgreementResponse, int64, error) {
@@ -288,6 +336,14 @@ func GetAllDisposalAgreements(filter dto.DisposalAgreementListFilter) ([]dto.Dis
 	}
 	if filter.Search != nil && *filter.Search != "" {
 		query = query.Where("agreement_number LIKE ?", "%"+*filter.Search+"%")
+	}
+	// created_at bertipe datetime — pakai DATE() supaya tanggal akhir ikut
+	// terhitung penuh, bukan terpotong di jam 00:00
+	if filter.StartDate != nil && *filter.StartDate != "" {
+		query = query.Where("DATE(created_at) >= ?", *filter.StartDate)
+	}
+	if filter.EndDate != nil && *filter.EndDate != "" {
+		query = query.Where("DATE(created_at) <= ?", *filter.EndDate)
 	}
 
 	var total int64

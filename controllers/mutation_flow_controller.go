@@ -45,6 +45,9 @@ func GetMutationDetail(c *gin.Context) {
 		return
 	}
 
+	result.WaitingForMe = services.IsMutationWaitingForUser(
+		c.GetString("user_id"), transactionNumber)
+
 	utils.SuccessResponse(c, http.StatusOK, "Mutation detail retrieved successfully", result)
 }
 
@@ -345,4 +348,81 @@ func GetMutationAttachmentStatus(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "Attachment status retrieved successfully", result)
+}
+
+// GetMutationAttachmentFile — stream untuk preview, ?download=1 untuk unduh
+func GetMutationAttachmentFile(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "invalid attachment id")
+		return
+	}
+
+	att, absolutePath, err := services.GetMutationAttachmentFile(uint(id))
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+		return
+	}
+
+	contentType := "application/octet-stream"
+	if att.MimeType != nil && *att.MimeType != "" {
+		contentType = *att.MimeType
+	}
+
+	disposition := "inline"
+	if c.Query("download") == "1" {
+		disposition = "attachment"
+	}
+
+	c.Header("Content-Disposition", disposition+"; filename=\""+att.FileName+"\"")
+	c.Header("Content-Type", contentType)
+	c.File(absolutePath)
+}
+
+// ReturnMutationForRevision — approver mengembalikan pengajuan ke DRAFT
+func ReturnMutationForRevision(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.ReturnForRevisionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.ReturnMutationForRevision(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Mutation returned for revision", result)
+}
+
+// CancelMutation — pembatalan oleh pengaju sendiri
+func CancelMutation(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.CancelTransactionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.CancelMutation(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Mutation cancelled successfully", result)
 }

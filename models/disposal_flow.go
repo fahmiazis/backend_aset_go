@@ -73,6 +73,11 @@ type TransactionDisposalAsset struct {
 	DisposalType      string    `gorm:"size:20;not null" json:"disposal_type"`
 	DisposalReason    *string   `gorm:"type:text" json:"disposal_reason"`
 	SaleValue         *float64  `gorm:"type:decimal(18,2)" json:"sale_value"` // diisi purchasing (SELL only)
+	// Diisi di stage akhir SELL, per aset: finance mencatat uang yang benar-benar
+	// diterima, tim pajak mencatat rujukan fakturnya.
+	IncomeValue       *float64   `gorm:"type:decimal(18,2)" json:"income_value"`
+	InvoiceNumber     *string    `gorm:"size:100" json:"invoice_number"`
+	InvoiceDate       *time.Time `gorm:"type:date" json:"invoice_date"`
 	DocumentNumber    *string   `gorm:"size:50" json:"document_number"`       // generated saat asset deletion
 	Notes             *string   `gorm:"type:text" json:"notes"`
 	Status            string    `gorm:"type:enum('PENDING','DELETED','CANCELLED');not null;default:PENDING;index" json:"status"`

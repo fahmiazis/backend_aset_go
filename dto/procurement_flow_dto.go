@@ -170,6 +170,11 @@ type ProcurementDetailWithStageResponse struct {
 	Items       []ProcurementItemWithVerificationResponse `json:"items"`
 	Stages      []TransactionStageResponse                `json:"stages"`
 	GRStatus    []AssetGRResponse                         `json:"gr_status,omitempty"`
+
+	// true kalau transaksi ini sedang menunggu tindakan user yang meminta detail.
+	// Dihitung dengan aturan yang sama dengan tab "Menunggu Saya" di daftar,
+	// supaya daftar dan detail tidak pernah berbeda pendapat.
+	WaitingForMe bool `json:"waiting_for_me"`
 }
 
 type ProcurementTransactionResponse struct {

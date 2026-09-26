@@ -69,16 +69,43 @@ type ExecuteDisposalRequest struct {
 // FINANCE — validasi + upload
 // ============================================================
 
+// Nilai pemasukan diisi per aset lewat SetDisposalIncomeValues, jadi konfirmasi
+// stage hanya meneruskan transaksi setelah semua aset terisi.
 type ConfirmDisposalFinanceRequest struct {
 	Notes *string `json:"notes"`
+}
+
+// Uang yang benar-benar diterima per aset. Dipisah dari sale_value karena
+// realisasinya bisa berbeda dari nilai yang disepakati purchasing.
+type SetDisposalIncomeValueRequest struct {
+	Assets []DisposalAssetIncomeValue `json:"assets" binding:"required,min=1,dive"`
+	Notes  *string                    `json:"notes"`
+}
+
+type DisposalAssetIncomeValue struct {
+	DisposalAssetID uint    `json:"disposal_asset_id" binding:"required"`
+	IncomeValue     float64 `json:"income_value" binding:"required,gt=0"`
 }
 
 // ============================================================
 // TAX — validasi + upload
 // ============================================================
 
+// Data faktur diisi per aset lewat SetDisposalInvoices.
 type ConfirmDisposalTaxRequest struct {
 	Notes *string `json:"notes"`
+}
+
+type SetDisposalInvoiceRequest struct {
+	Assets []DisposalAssetInvoice `json:"assets" binding:"required,min=1,dive"`
+	Notes  *string                `json:"notes"`
+}
+
+type DisposalAssetInvoice struct {
+	DisposalAssetID uint   `json:"disposal_asset_id" binding:"required"`
+	InvoiceNumber   string `json:"invoice_number" binding:"required"`
+	// format YYYY-MM-DD
+	InvoiceDate string `json:"invoice_date" binding:"required"`
 }
 
 // ============================================================
@@ -140,21 +167,21 @@ type ReviewDisposalAttachmentRequest struct {
 // ============================================================
 
 type DisposalTransactionResponse struct {
-	ID                      uint      `json:"id"`
-	TransactionNumber       string    `json:"transaction_number"`
-	TransactionType         string    `json:"transaction_type"`
-	TransactionDate         time.Time `json:"transaction_date"`
-	Status                  string    `json:"status"`
-	CurrentStage            string    `json:"current_stage"`
-	DisposalType            *string   `json:"disposal_type"`
-	SaleValue               *float64  `json:"sale_value"`
-	ApprovalRequestNumber   *string   `json:"approval_request_number"`
-	ApprovalAgreementNumber *string   `json:"approval_agreement_number"`
-	Notes                   *string   `json:"notes"`
-	CreatedBy               string    `json:"created_by"`
-	CreatedByName           *string   `json:"created_by_name"`
-	CreatedAt               time.Time `json:"created_at"`
-	UpdatedAt               time.Time `json:"updated_at"`
+	ID                      uint       `json:"id"`
+	TransactionNumber       string     `json:"transaction_number"`
+	TransactionType         string     `json:"transaction_type"`
+	TransactionDate         time.Time  `json:"transaction_date"`
+	Status                  string     `json:"status"`
+	CurrentStage            string     `json:"current_stage"`
+	DisposalType            *string    `json:"disposal_type"`
+	SaleValue               *float64   `json:"sale_value"`
+	ApprovalRequestNumber   *string    `json:"approval_request_number"`
+	ApprovalAgreementNumber *string    `json:"approval_agreement_number"`
+	Notes                   *string    `json:"notes"`
+	CreatedBy               string     `json:"created_by"`
+	CreatedByName           *string    `json:"created_by_name"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
 }
 
 type DisposalAssetResponse struct {
@@ -170,6 +197,9 @@ type DisposalAssetResponse struct {
 	DisposalType      string                       `json:"disposal_type"`
 	DisposalReason    *string                      `json:"disposal_reason"`
 	SaleValue         *float64                     `json:"sale_value"`
+	IncomeValue       *float64                     `json:"income_value"`
+	InvoiceNumber     *string                      `json:"invoice_number"`
+	InvoiceDate       *time.Time                   `json:"invoice_date"`
 	DocumentNumber    *string                      `json:"document_number"`
 	Notes             *string                      `json:"notes"`
 	Status            string                       `json:"status"`
@@ -206,6 +236,9 @@ type DisposalDetailResponse struct {
 	Transaction DisposalTransactionResponse `json:"transaction"`
 	Assets      []DisposalAssetResponse     `json:"assets"`
 	Stages      []TransactionStageResponse  `json:"stages"`
+	// true kalau stage berjalan menunggu tindakan user yang sedang login —
+	// dipakai UI untuk menyembunyikan tombol aksi yang bukan bagiannya
+	WaitingForMe bool `json:"waiting_for_me"`
 }
 
 // ============================================================
@@ -242,6 +275,11 @@ type DisposalListFilter struct {
 	CreatedBy    *string `form:"created_by"`
 	StartDate    *string `form:"start_date"`
 	EndDate      *string `form:"end_date"`
-	Page         int     `form:"page"`
-	Limit        int     `form:"limit"`
+	// Kata kunci untuk nomor transaksi, catatan, dan nomor/nama aset di dalamnya
+	Search *string `form:"search"`
+	// true = hanya pengajuan yang menunggu tindakan user yang sedang login
+	WaitingForMe bool   `form:"waiting_for_me"`
+	ViewerUserID string `form:"-"`
+	Page         int    `form:"page"`
+	Limit        int    `form:"limit"`
 }

@@ -1121,12 +1121,14 @@ func mapTransactionApprovalToResponse(approval models.TransactionApproval) dto.T
 		response.ApproverRoleName = &approval.ApproverRole.Name
 	}
 
+	// Nama yang ditampilkan memakai fullname, sama dengan created_by_name di
+	// detail transaksi. Username dipakai kalau fullname kosong.
 	if approval.ActualApprover != nil {
-		response.ApprovedByName = &approval.ActualApprover.Username
+		response.ApprovedByName = userDisplayName(approval.ActualApprover)
 	}
 
 	if approval.ActualRejecter != nil {
-		response.RejectedByName = &approval.ActualRejecter.Username
+		response.RejectedByName = userDisplayName(approval.ActualRejecter)
 	}
 
 	if approval.ApprovalFlowStep != nil {
@@ -1322,4 +1324,15 @@ func autoRejectTransaction(userID, transactionNumber, transactionType, notes str
 	MarkTransactionAsExpired(transactionNumber)
 
 	return tx.Commit().Error
+}
+
+// userDisplayName mengembalikan nama yang layak ditampilkan untuk satu user.
+func userDisplayName(user *models.User) *string {
+	if user == nil {
+		return nil
+	}
+	if name := strings.TrimSpace(user.Fullname); name != "" {
+		return &name
+	}
+	return &user.Username
 }

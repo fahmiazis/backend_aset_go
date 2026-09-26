@@ -10,12 +10,28 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 )
 
-const AttachmentStoragePath = "/app/documents"
+// AttachmentStorageRoot adalah root penyimpanan semua dokumen transaksi.
+//
+// Default "/app/documents" adalah path di dalam container (lihat volume di
+// docker-compose.yml). Path itu tidak berlaku saat backend dijalankan langsung
+// di host — di Windows "/app/documents" jatuh ke root drive yang sedang aktif
+// dan biasanya gagal dibuat. Karena itu bisa ditimpa lewat env
+// ATTACHMENT_STORAGE_PATH.
+//
+// Sengaja fungsi, bukan var package-level: inisialisasi var berjalan sebelum
+// main() memanggil godotenv.Load(), jadi isi .env belum terbaca saat itu.
+func AttachmentStorageRoot() string {
+	if custom := strings.TrimSpace(os.Getenv("ATTACHMENT_STORAGE_PATH")); custom != "" {
+		return filepath.Clean(custom)
+	}
+	return filepath.Clean("/app/documents")
+}
 
 // ============================================================
 // ATTACHMENT CONFIG CRUD
@@ -166,7 +182,7 @@ func UploadAttachment(
 	// Buat direktori kalau belum ada
 	// Struktur: /home/dev/.../documents/{transaction_type}/{transaction_number}/{stage}/
 	dirPath := filepath.Join(
-		AttachmentStoragePath,
+		AttachmentStorageRoot(),
 		transactionType,
 		sanitizePathSegment(transactionNumber),
 		stage,
@@ -243,6 +259,12 @@ func ReviewAttachment(reviewerID string, attachmentID uint, req dto.ReviewAttach
 
 	if attachment.Status != models.AttachmentStatusPending {
 		return nil, errors.New("only PENDING attachments can be reviewed")
+	}
+
+	// Pengunggah tidak boleh menilai dokumennya sendiri — review dokumen adalah
+	// kontrol terpisah dari pengunggahan, jadi harus dilakukan orang lain.
+	if attachment.UploadedBy == reviewerID {
+		return nil, errors.New("you cannot review a document you uploaded yourself")
 	}
 
 	now := time.Now()

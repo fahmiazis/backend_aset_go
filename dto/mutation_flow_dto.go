@@ -87,6 +87,8 @@ type MutationAssetResponse struct {
 	DocumentNumber    *string                      `json:"document_number"`
 	Notes             *string                      `json:"notes"`
 	Status            string                       `json:"status"`
+	NeedsRevision     bool                         `json:"needs_revision"`
+	RevisionNotes     *string                      `json:"revision_notes"`
 	Attachments       []MutationAttachmentResponse `json:"attachments,omitempty"`
 	CreatedAt         time.Time                    `json:"created_at"`
 	UpdatedAt         time.Time                    `json:"updated_at"`
@@ -134,6 +136,11 @@ type MutationDetailResponse struct {
 	Transaction MutationTransactionResponse `json:"transaction"`
 	Assets      []MutationAssetResponse     `json:"assets"`
 	Stages      []TransactionStageResponse  `json:"stages"`
+
+	// true kalau transaksi ini sedang menunggu tindakan user yang meminta detail.
+	// Dihitung dengan aturan yang sama dengan tab "Menunggu Saya" di daftar,
+	// supaya daftar dan detail tidak pernah berbeda pendapat.
+	WaitingForMe bool `json:"waiting_for_me"`
 }
 
 // ============================================================

@@ -13,6 +13,8 @@ const (
 	StageMutationExecute   = "EXECUTE_MUTATION"   // PIC Asset eksekusi perpindahan
 	StageMutationFinished  = "FINISHED"
 	StageMutationRejected  = "REJECTED"
+	// CANCELLED — dibatalkan oleh pengaju sendiri, bukan ditolak approver
+	StageMutationCancelled = "CANCELLED"
 )
 
 const (
@@ -41,6 +43,10 @@ type TransactionMutationAsset struct {
 	DocumentNumber    *string   `gorm:"size:50" json:"document_number"` // generated saat eksekusi
 	Notes             *string   `gorm:"type:text" json:"notes"`
 	Status            string    `gorm:"type:enum('PENDING','EXECUTED','CANCELLED');not null;default:PENDING;index" json:"status"`
+	// Ditandai approver saat meminta revisi. Selama masih true, hanya baris
+	// inilah yang boleh diubah pengaju; dibersihkan saat submit ulang.
+	NeedsRevision bool    `gorm:"not null;default:false;index" json:"needs_revision"`
+	RevisionNotes *string `gorm:"type:text" json:"revision_notes"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 
