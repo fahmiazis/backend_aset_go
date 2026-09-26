@@ -122,7 +122,20 @@ func CancelMutation(
 		return nil, err
 	}
 
-	// Aset dilepas kembali supaya tidak tertahan di mutasi yang batal
+	// Aset dilepas kembali supaya tidak tertahan di mutasi yang batal.
+	// Status asetnya ikut dipulihkan ke AVAILABLE (sama seperti RejectMutation)
+	// — dulu hanya barisnya yang ditandai CANCELLED, sehingga asetnya tertahan
+	// IN_MUTATION selamanya dan tidak bisa dipilih di transaksi mana pun.
+	if err := tx.Model(&models.Asset{}).
+		Where("id IN (?)", tx.Model(&models.TransactionMutationAsset{}).
+			Select("asset_id").
+			Where("transaction_id = ? AND status = ?", transaction.ID, models.MutationAssetStatusPending)).
+		Where("asset_status = ?", models.AssetStatusInMutation).
+		Update("asset_status", models.AssetStatusAvailable).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
 	if err := tx.Model(&models.TransactionMutationAsset{}).
 		Where("transaction_id = ? AND status = ?",
 			transaction.ID, models.MutationAssetStatusPending).

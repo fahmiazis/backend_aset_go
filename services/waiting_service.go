@@ -39,6 +39,12 @@ type waitingConfig struct {
 	// stage yang hanya bisa dilanjutkan pembuatnya
 	draftStage string
 	owners     map[string]stageOwner
+
+	// Opsional: tugas yang dipegang user TERTENTU, bukan role — mis. penerima
+	// serah terima aset. extraCondition dipakai filter daftar, extraCheck
+	// dipakai halaman detail; keduanya harus mencerminkan aturan yang sama.
+	extraCondition func(userID string) *gorm.DB
+	extraCheck     func(userID string, transaction *models.Transaction) bool
 }
 
 func userRoleIDs(userID string) []string {
@@ -268,6 +274,10 @@ func applyWaitingFilter(query *gorm.DB, userID string, cfg waitingConfig) *gorm.
 		conditions = conditions.Or("transaction_number IN ?", numbers)
 	}
 
+	if cfg.extraCondition != nil {
+		conditions = conditions.Or(cfg.extraCondition(userID))
+	}
+
 	return query.Where(conditions)
 }
 
@@ -280,6 +290,10 @@ func isWaitingForUser(userID string, transaction *models.Transaction, cfg waitin
 	}
 
 	stage := transaction.CurrentStage
+
+	if cfg.extraCheck != nil && cfg.extraCheck(userID, transaction) {
+		return true
+	}
 
 	// DRAFT hanya bisa dilanjutkan pembuatnya
 	if stage == cfg.draftStage {

@@ -3,24 +3,34 @@ package dto
 import "time"
 
 type AssetResponse struct {
-	ID            uint                `json:"id"`
-	AssetNumber   string              `json:"asset_number"`
-	AssetName     string              `json:"asset_name"`
-	Description   *string             `json:"description"`
-	Brand         *string             `json:"brand"`
-	UnitOfMeasure *string             `json:"unit_of_measure"`
-	UnitQuantity  *float64            `json:"unit_quantity"`
-	Location      *string             `json:"location"`
-	Grouping      *string             `json:"grouping"`
-	CategoryID    *uint               `json:"category_id"`
-	CategoryName  *string             `json:"category_name,omitempty"`
-	BranchCode    *string             `json:"branch_code"`
-	IONumber      *string             `json:"io_number"`
-	RecordType    *string             `json:"record_type"`
-	AssetStatus   string              `json:"asset_status"`
-	CreatedAt     time.Time           `json:"created_at"`
-	UpdatedAt     time.Time           `json:"updated_at"`
-	CurrentValue  *AssetValueResponse `json:"current_value,omitempty"`
+	ID            uint     `json:"id"`
+	AssetNumber   string   `json:"asset_number"`
+	AssetName     string   `json:"asset_name"`
+	Description   *string  `json:"description"`
+	Brand         *string  `json:"brand"`
+	UnitOfMeasure *string  `json:"unit_of_measure"`
+	UnitQuantity  *float64 `json:"unit_quantity"`
+	Location      *string  `json:"location"`
+	Grouping      *string  `json:"grouping"`
+	CategoryID    *uint    `json:"category_id"`
+	CategoryName  *string  `json:"category_name,omitempty"`
+	BranchCode    *string  `json:"branch_code"`
+	IONumber      *string  `json:"io_number"`
+	RecordType    *string  `json:"record_type"`
+	AssetStatus   string   `json:"asset_status"`
+	// pemegang hasil serah terima; kosong = dipegang cabang
+	AssignedUserID   *string             `json:"assigned_user_id"`
+	AssignedUserName *string             `json:"assigned_user_name,omitempty"`
+	AssignedAt       *time.Time          `json:"assigned_at"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
+	CurrentValue     *AssetValueResponse `json:"current_value,omitempty"`
+}
+
+// BranchOption — pilihan cabang untuk filter halaman aset
+type BranchOption struct {
+	BranchCode string `json:"branch_code"`
+	BranchName string `json:"branch_name"`
 }
 
 type AssetValueResponse struct {

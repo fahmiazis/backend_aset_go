@@ -38,6 +38,9 @@ type emailFlowConfig struct {
 	approvalFlows map[string]string
 	finishedStage string
 	detailPath    string
+	// opsional: pengerja stage yang berupa user tertentu (bukan role),
+	// mis. penerima serah terima aset. ok=false → pakai aturan biasa.
+	stageUsers func(t *models.Transaction, stage string) (userIDs []string, ok bool)
 }
 
 func emailFlowFor(transactionType string) (emailFlowConfig, error) {
@@ -96,6 +99,29 @@ func emailFlowFor(transactionType string) (emailFlowConfig, error) {
 			approvalFlows: map[string]string{models.StageDisposalApprovalRequest: "DISPOSAL_APPROVAL_REQUEST"},
 			finishedStage: models.StageDisposalFinished,
 			detailPath:    "/dashboard/disposal/",
+		}, nil
+	case TxHandover:
+		return emailFlowConfig{
+			waiting:        handoverWaiting,
+			getTransaction: getHandoverTransaction,
+			nextStage: func(t *models.Transaction) string {
+				return nextInList([]string{
+					models.StageHandoverDraft,
+					models.StageHandoverApproval,
+					models.StageHandoverReceiving,
+					models.StageHandoverFinished,
+				}, t.CurrentStage)
+			},
+			approvalFlows: map[string]string{models.StageHandoverApproval: models.FlowAssetHandoverApproval},
+			finishedStage: models.StageHandoverFinished,
+			detailPath:    "/dashboard/handover/",
+			stageUsers: func(t *models.Transaction, stage string) ([]string, bool) {
+				if stage == models.StageHandoverReceiving && handoverTypeOf(t) == models.HandoverTypeHandover &&
+					t.HandoverToUserID != nil {
+					return []string{*t.HandoverToUserID}, true
+				}
+				return nil, false
+			},
 		}, nil
 	}
 	return emailFlowConfig{}, fmt.Errorf("jenis transaksi %s tidak didukung", transactionType)
@@ -246,6 +272,12 @@ func stageHandlers(cfg emailFlowConfig, transaction *models.Transaction, stage s
 
 	if stage == cfg.waiting.draftStage || stage == cfg.finishedStage {
 		return []string{transaction.CreatedBy}
+	}
+
+	if cfg.stageUsers != nil {
+		if users, ok := cfg.stageUsers(transaction, stage); ok {
+			return users
+		}
 	}
 
 	branchIDs := transactionBranchIDs(transaction)

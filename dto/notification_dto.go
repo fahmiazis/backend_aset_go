@@ -6,7 +6,7 @@ import "time"
 // Bukan notifikasi tersimpan: dihitung ulang dari aturan "Menunggu Saya"
 // setiap kali diminta, jadi hilang sendiri begitu aksinya dikerjakan.
 type WaitingNotification struct {
-	TransactionType   string  `json:"transaction_type"` // procurement | mutation | disposal | disposal_agreement
+	TransactionType   string  `json:"transaction_type"` // procurement | mutation | disposal | disposal_agreement | handover
 	TransactionNumber string  `json:"transaction_number"`
 	CurrentStage      string  `json:"current_stage"`
 	CreatedByName     *string `json:"created_by_name"`

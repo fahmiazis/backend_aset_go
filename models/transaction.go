@@ -14,6 +14,8 @@ type Transaction struct {
 	IONumber             *string    `gorm:"size:50" json:"io_number"`                                  // ADD
 	MutationCategoryID   *uint      `gorm:"index" json:"mutation_category_id"`
 	MutationToBranchCode *string    `gorm:"size:50;index" json:"mutation_to_branch_code"`
+	HandoverType         *string    `gorm:"size:20" json:"handover_type"`             // serah terima: HANDOVER | RETURN
+	HandoverToUserID     *string    `gorm:"type:char(36)" json:"handover_to_user_id"` // penerima (HANDOVER)
 	Notes                *string    `gorm:"type:text" json:"notes"`
 	CreatedBy            string     `gorm:"size:100" json:"created_by"`
 	ApprovedBy           *string    `gorm:"size:100" json:"approved_by"`
@@ -21,10 +23,10 @@ type Transaction struct {
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
 
-	DisposalType            *string    `gorm:"size:20;index" json:"disposal_type"`
-	SaleValue               *float64   `gorm:"type:decimal(18,2)" json:"sale_value"`
-	ApprovalRequestNumber   *string    `gorm:"size:100" json:"approval_request_number"`
-	ApprovalAgreementNumber *string    `gorm:"size:100" json:"approval_agreement_number"`
+	DisposalType            *string  `gorm:"size:20;index" json:"disposal_type"`
+	SaleValue               *float64 `gorm:"type:decimal(18,2)" json:"sale_value"`
+	ApprovalRequestNumber   *string  `gorm:"size:100" json:"approval_request_number"`
+	ApprovalAgreementNumber *string  `gorm:"size:100" json:"approval_agreement_number"`
 
 	// Relations to Transaction Details
 	TransactionProcurements []TransactionProcurement `gorm:"foreignKey:TransactionID" json:"transaction_procurements,omitempty"`

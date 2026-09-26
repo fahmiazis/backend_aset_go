@@ -17,6 +17,7 @@ const (
 	TxDisposal    = "disposal"     // -DPSL
 	TxMutation    = "mutation"     // -MTI
 	TxStockOpname = "stock_opname" // -OPNM
+	TxHandover    = "handover"     // -HOV
 )
 
 // GetTransactionSuffix returns suffix based on transaction type
@@ -30,6 +31,8 @@ func GetTransactionSuffix(txType string) string {
 		return "MTI"
 	case TxStockOpname:
 		return "OPNM"
+	case TxHandover:
+		return "HOV"
 	default:
 		return "TRX"
 	}

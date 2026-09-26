@@ -103,6 +103,8 @@ func transactionTypeLabel(txType string) string {
 		return "Disposal Aset"
 	case TxDisposalAgreement:
 		return "Disposal Agreement"
+	case TxHandover:
+		return "Serah Terima Aset"
 	}
 	return txType
 }
@@ -231,6 +233,36 @@ func buildTransactionSummary(transaction *models.Transaction, ctx emailRenderCon
 		}
 		if sell && len(rows) > 0 {
 			summary.totalRow = []string{"", "", "", "Total", formatRupiahEmail(total)}
+		}
+
+	case TxHandover:
+		handoverType := handoverTypeOf(transaction)
+		label := "Serah terima ke user"
+		if handoverType == models.HandoverTypeReturn {
+			label = "Pengembalian ke cabang"
+		}
+		summary.info = append(summary.info, [2]string{"Jenis Serah Terima", label})
+		if transaction.HandoverToUserID != nil {
+			summary.info = append(summary.info, [2]string{"Penerima", strOr(resolveUserFullname(*transaction.HandoverToUserID), "-")})
+		}
+
+		var rows []models.TransactionHandoverAsset
+		config.DB.Preload("Asset").
+			Where("transaction_id = ? AND status <> ?", transaction.ID, models.HandoverAssetStatusCancelled).
+			Order("id").Find(&rows)
+
+		summary.assetTitle = fmt.Sprintf("Aset yang Diserahterimakan (%d)", len(rows))
+		summary.columns = []string{"No", "Nomor Aset", "Nama Aset", "Pemegang Sebelumnya"}
+		for i, row := range rows {
+			name := "-"
+			if row.Asset != nil {
+				name = row.Asset.AssetName
+			}
+			holder := "Cabang"
+			if row.FromUserID != nil {
+				holder = strOr(resolveUserFullname(*row.FromUserID), "-")
+			}
+			summary.assetRows = append(summary.assetRows, []string{fmt.Sprint(i + 1), row.AssetNumber, name, holder})
 		}
 	}
 

@@ -171,6 +171,11 @@ func AddAssetToDisposal(userID string, transactionNumber string, req dto.AddDisp
 		return nil, fmt.Errorf("asset %s is not available for disposal (status: %s)", req.AssetNumber, asset.AssetStatus)
 	}
 
+	// aset yang dipegang user harus dikembalikan ke cabang dulu
+	if err := assertAssetNotHeld(&asset); err != nil {
+		return nil, err
+	}
+
 	// Validasi branch code asset harus sama dengan homebase creator
 	creatorHomebase, err := GetUserActiveHomebase(transaction.CreatedBy)
 	if err != nil {

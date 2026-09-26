@@ -140,6 +140,12 @@ func AddAssetToMutation(userID string, transactionNumber string, req dto.AddMuta
 		return nil, fmt.Errorf("asset %s is not available for mutation (status: %s)", req.AssetNumber, asset.AssetStatus)
 	}
 
+	// aset yang dipegang user harus dikembalikan ke cabang dulu — kalau tidak,
+	// asetnya pindah cabang sementara pemegangnya tertinggal
+	if err := assertAssetNotHeld(&asset); err != nil {
+		return nil, err
+	}
+
 	// Validasi category harus sama dengan draft
 	if asset.CategoryID == nil || *asset.CategoryID != *transaction.MutationCategoryID {
 		return nil, fmt.Errorf("asset %s category does not match mutation category", req.AssetNumber)

@@ -158,6 +158,9 @@ var stageToStatus = map[string]string{
 
 	// stock opname
 	models.StageStockOpnameExecute: models.TransactionStatusProcessing,
+
+	// serah terima aset
+	models.StageHandoverReceiving: models.TransactionStatusProcessing,
 }
 
 // updateTransactionStage update current_stage & status di tabel transactions

@@ -87,6 +87,7 @@ func GetWaitingNotifications(userID string) (*dto.WaitingNotificationResponse, e
 		{TxProcurement, procurementWaiting},
 		{TxMutationFlow, mutationWaiting},
 		{TxDisposalFlow, disposalWaiting},
+		{TxHandover, handoverWaiting},
 	}
 
 	items := []dto.WaitingNotification{}

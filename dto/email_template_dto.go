@@ -7,7 +7,7 @@ import "time"
 // ============================================================
 
 type CreateEmailTemplateRequest struct {
-	TransactionType string   `json:"transaction_type" binding:"required,oneof=procurement mutation disposal disposal_agreement"`
+	TransactionType string   `json:"transaction_type" binding:"required,oneof=procurement mutation disposal disposal_agreement handover"`
 	Stage           string   `json:"stage" binding:"required"`
 	Action          string   `json:"action" binding:"required,oneof=proceed reject revise cancel"`
 	Subject         string   `json:"subject" binding:"required,max=255"`

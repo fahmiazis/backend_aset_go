@@ -24,7 +24,7 @@ func GetAllAssets(c *gin.Context) {
 		filter.Limit = 10
 	}
 
-	assets, total, err := services.GetAllAssets(filter)
+	assets, total, err := services.GetAllAssets(filter, assetViewer(c))
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return
@@ -40,12 +40,28 @@ func GetAllAssets(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Assets retrieved successfully", response)
 }
 
+func assetViewer(c *gin.Context) services.AssetViewer {
+	return services.AssetViewer{UserID: c.GetString("user_id"), IsAdmin: isAdminRequest(c)}
+}
+
+// GET /assets/my-branches — cabang yang boleh dilihat user (dropdown filter)
+func GetViewableAssetBranches(c *gin.Context) {
+	branches, err := services.GetViewableAssetBranches(assetViewer(c))
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.SuccessResponse(c, http.StatusOK, "Branches retrieved successfully", branches)
+}
+
 func GetAssetByNumber(c *gin.Context) {
 	assetNumber := c.Param("number")
 
 	asset, err := services.GetAssetByNumber(assetNumber)
-	if err != nil {
-		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
+	// aset cabang lain dibalas "tidak ditemukan", bukan 403 — tidak
+	// membocorkan bahwa nomor aset itu ada
+	if err != nil || !services.CanViewAsset(assetViewer(c), asset) {
+		utils.ErrorResponse(c, http.StatusNotFound, "asset not found")
 		return
 	}
 
@@ -54,6 +70,11 @@ func GetAssetByNumber(c *gin.Context) {
 
 func GetAssetValueHistory(c *gin.Context) {
 	assetNumber := c.Param("number")
+
+	if asset, err := services.GetAssetByNumber(assetNumber); err != nil || !services.CanViewAsset(assetViewer(c), asset) {
+		utils.ErrorResponse(c, http.StatusNotFound, "asset not found")
+		return
+	}
 
 	history, err := services.GetAssetValueHistory(assetNumber)
 	if err != nil {

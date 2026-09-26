@@ -556,6 +556,10 @@ func runPostApprovalHooks(userID, transactionNumber, transactionType string) {
 	if err := autoCompleteDisposalAgreement(userID, transactionNumber, transactionType); err != nil {
 		fmt.Printf("auto complete disposal agreement warning: %v\n", err)
 	}
+
+	if err := autoCompleteHandoverApproval(userID, transactionNumber, transactionType); err != nil {
+		fmt.Printf("auto complete handover approval warning: %v\n", err)
+	}
 }
 
 // InitiateTransactionApproval creates all approval records for a transaction based on flow
@@ -859,6 +863,10 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 
 	if err := autoRejectTransaction(userID, approval.TransactionNumber, approval.TransactionType, notesText); err != nil {
 		fmt.Printf("auto reject transaction warning: %v\n", err)
+	}
+
+	if err := autoRejectHandover(userID, approval.TransactionNumber, approval.TransactionType, notesText); err != nil {
+		fmt.Printf("auto reject handover warning: %v\n", err)
 	}
 
 	return nil

@@ -41,6 +41,8 @@ func transactionNeedsRevision(transactionID uint, transactionType string) bool {
 		table = "transaction_mutation_assets"
 	case TxDisposalFlow:
 		table = "transaction_disposal_assets"
+	case TxHandover:
+		table = "transaction_handover_assets"
 	default:
 		return false
 	}
@@ -302,26 +304,31 @@ func mapAssetCategoriesToResponse(categories []models.AssetCategory) []dto.Asset
 
 func mapAssetToResponse(asset models.Asset) dto.AssetResponse {
 	response := dto.AssetResponse{
-		ID:            asset.ID,
-		AssetNumber:   asset.AssetNumber,
-		AssetName:     asset.AssetName,
-		Description:   asset.Description,
-		Brand:         asset.Brand,
-		UnitOfMeasure: asset.UnitOfMeasure,
-		UnitQuantity:  asset.UnitQuantity,
-		Location:      asset.Location,
-		Grouping:      asset.Grouping,
-		CategoryID:    asset.CategoryID, // FIX: sudah *uint, langsung assign
-		BranchCode:    asset.BranchCode,
-		IONumber:      asset.IONumber,
-		RecordType:    asset.RecordType,
-		AssetStatus:   asset.AssetStatus,
-		CreatedAt:     asset.CreatedAt,
-		UpdatedAt:     asset.UpdatedAt,
+		ID:             asset.ID,
+		AssetNumber:    asset.AssetNumber,
+		AssetName:      asset.AssetName,
+		Description:    asset.Description,
+		Brand:          asset.Brand,
+		UnitOfMeasure:  asset.UnitOfMeasure,
+		UnitQuantity:   asset.UnitQuantity,
+		Location:       asset.Location,
+		Grouping:       asset.Grouping,
+		CategoryID:     asset.CategoryID, // FIX: sudah *uint, langsung assign
+		BranchCode:     asset.BranchCode,
+		IONumber:       asset.IONumber,
+		RecordType:     asset.RecordType,
+		AssetStatus:    asset.AssetStatus,
+		CreatedAt:      asset.CreatedAt,
+		UpdatedAt:      asset.UpdatedAt,
+		AssignedUserID: asset.AssignedUserID,
+		AssignedAt:     asset.AssignedAt,
 	}
 
 	if asset.Category != nil {
 		response.CategoryName = &asset.Category.CategoryName
+	}
+	if asset.AssignedUserID != nil {
+		response.AssignedUserName = resolveUserFullname(*asset.AssignedUserID)
 	}
 
 	return response

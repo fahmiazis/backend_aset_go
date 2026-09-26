@@ -9,8 +9,71 @@ import (
 	"gorm.io/gorm"
 )
 
-func GetAllAssets(filter dto.AssetListFilter) ([]dto.AssetResponse, int64, error) {
+// AssetViewer — siapa yang meminta data aset. Non-admin hanya boleh melihat
+// aset di cabang yang dia punya (homebase + assignment/temporary di
+// user_branchs), sama dengan aturan akses cabang di approval.
+type AssetViewer struct {
+	UserID  string
+	IsAdmin bool
+}
+
+// AssetBranchScope — kode cabang yang boleh dilihat. all=true untuk admin.
+func AssetBranchScope(viewer AssetViewer) (codes []string, all bool) {
+	if viewer.IsAdmin {
+		return nil, true
+	}
+	return userBranchCodes(viewer.UserID), false
+}
+
+// CanViewAsset — dipakai endpoint detail aset.
+func CanViewAsset(viewer AssetViewer, asset *dto.AssetResponse) bool {
+	codes, all := AssetBranchScope(viewer)
+	if all {
+		return true
+	}
+	if asset.BranchCode == nil {
+		return false
+	}
+	for _, code := range codes {
+		if code == *asset.BranchCode {
+			return true
+		}
+	}
+	return false
+}
+
+// GetViewableAssetBranches — pilihan dropdown cabang di halaman aset.
+func GetViewableAssetBranches(viewer AssetViewer) ([]dto.BranchOption, error) {
+	codes, all := AssetBranchScope(viewer)
+	query := config.DB.Model(&models.Branch{}).Order("branch_code")
+	if !all {
+		if len(codes) == 0 {
+			return []dto.BranchOption{}, nil
+		}
+		query = query.Where("branch_code IN ?", codes)
+	}
+	var branches []models.Branch
+	if err := query.Find(&branches).Error; err != nil {
+		return nil, err
+	}
+	result := make([]dto.BranchOption, 0, len(branches))
+	for _, b := range branches {
+		result = append(result, dto.BranchOption{BranchCode: b.BranchCode, BranchName: b.BranchName})
+	}
+	return result, nil
+}
+
+func GetAllAssets(filter dto.AssetListFilter, viewer AssetViewer) ([]dto.AssetResponse, int64, error) {
 	query := config.DB.Model(&models.Asset{}).Where("deleted_at IS NULL")
+
+	// Batasi ke cabang milik user. Berlaku untuk SEMUA pemakai GET /assets
+	// (halaman aset, pemilih aset di mutasi/disposal/stock opname, dashboard).
+	if codes, all := AssetBranchScope(viewer); !all {
+		if len(codes) == 0 {
+			return []dto.AssetResponse{}, 0, nil
+		}
+		query = query.Where("branch_code IN ?", codes)
+	}
 
 	if filter.BranchCode != nil {
 		query = query.Where("branch_code = ?", *filter.BranchCode)

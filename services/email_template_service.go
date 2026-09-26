@@ -46,6 +46,11 @@ var emailTemplateStages = map[string][]string{
 		models.StageDisposalTax,
 		models.StageDisposalAssetDeletion,
 	},
+	TxHandover: {
+		models.StageHandoverDraft,
+		models.StageHandoverApproval,
+		models.StageHandoverReceiving,
+	},
 	// Agreement: CREATE = saat agreement dibuat (belum punya stage),
 	// APPROVAL_AGREEMENT = approve/tolak step agreement
 	TxDisposalAgreement: {
