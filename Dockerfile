@@ -5,7 +5,7 @@ FROM golang:1.25-alpine AS builder
 RUN apk add --no-cache git
 
 # Install goose
-RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+RUN go install github.com/pressly/goose/v3/cmd/goose@v3.26.0
 
 # Set working directory
 WORKDIR /app
