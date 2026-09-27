@@ -20,10 +20,15 @@ func SetupUserRoutes(rg *gin.RouterGroup) {
 			adminRoutes.PUT("/:id", controllers.UpdateUser)
 			adminRoutes.DELETE("/:id", controllers.DeleteUser)
 			adminRoutes.POST("/:id/roles", controllers.AssignRoles)
+			adminRoutes.POST("/:id/avatar", controllers.UploadUserAvatar)
+			adminRoutes.DELETE("/:id/avatar", controllers.DeleteUserAvatar)
 		}
 
 		// User can view their own profile (handled in auth routes /auth/me)
 		// Or admin/manager can view specific user
 		users.GET("/:id", middleware.RequireRole("admin", "manager"), controllers.GetUserByID)
+
+		// Foto profil boleh dilihat semua user yang login (navbar, profil, dsb)
+		users.GET("/:id/avatar", controllers.ServeUserAvatar)
 	}
 }

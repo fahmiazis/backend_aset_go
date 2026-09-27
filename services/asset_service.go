@@ -84,6 +84,9 @@ func GetAllAssets(filter dto.AssetListFilter, viewer AssetViewer) ([]dto.AssetRe
 	if filter.AssetStatus != nil {
 		query = query.Where("asset_status = ?", *filter.AssetStatus)
 	}
+	if filter.AssignedUserID != nil && *filter.AssignedUserID != "" {
+		query = query.Where("assigned_user_id = ?", *filter.AssignedUserID)
+	}
 	if filter.Search != nil && *filter.Search != "" {
 		search := "%" + *filter.Search + "%"
 		// FIX: ILIKE itu sintaks PostgreSQL — MariaDB menolaknya dengan syntax

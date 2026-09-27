@@ -32,6 +32,7 @@ type UserDetailResponse struct {
 	NIK       *string        `json:"nik"`        // ← Pointer
 	MPNNumber *string        `json:"mpn_number"` // ← Pointer
 	Status    string         `json:"status"`
+	HasAvatar bool           `json:"has_avatar"` // foto profil: GET /users/:id/avatar
 	Roles     []RoleResponse `json:"roles"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -46,4 +47,10 @@ type RoleResponse struct {
 type AssignRoleRequest struct {
 	// Satu user hanya boleh punya satu role. Lihat CreateUserRequest.
 	RoleIDs []string `json:"role_ids" binding:"required,min=1,max=1"`
+}
+
+// ChangePasswordRequest — PUT /auth/me/password (user mengganti password sendiri)
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required,min=6"`
 }

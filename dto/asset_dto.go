@@ -53,6 +53,8 @@ type AssetListFilter struct {
 	CategoryID  *uint   `form:"category_id"`
 	AssetStatus *string `form:"asset_status"`
 	Search      *string `form:"search"`
-	Page        int     `form:"page" binding:"min=1"`
-	Limit       int     `form:"limit" binding:"min=1,max=100"`
+	// aset yang sedang dipegang user ini (hasil serah terima)
+	AssignedUserID *string `form:"assigned_user_id"`
+	Page           int     `form:"page" binding:"min=1"`
+	Limit          int     `form:"limit" binding:"min=1,max=100"`
 }

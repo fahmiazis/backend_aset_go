@@ -20,6 +20,9 @@ type User struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
+	// path file foto profil di disk; disajikan lewat GET /users/:id/avatar
+	AvatarPath *string `gorm:"type:varchar(500)" json:"-"`
+
 	// Relations
 	RefreshTokens []RefreshToken `gorm:"foreignKey:UserID" json:"-"`
 	UserRoles     []UserRole     `gorm:"foreignKey:UserID" json:"-"`

@@ -27,6 +27,15 @@ type BranchResponse struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+// UserBranchMembershipResponse — cabang milik seorang user beserta jenis keanggotaannya.
+// BranchType di sini tipe cabangnya sendiri; tipe baris user_branchs
+// (homebase/assignment/temporary) ada di MembershipType.
+type UserBranchMembershipResponse struct {
+	BranchResponse
+	MembershipType string `json:"membership_type"`
+	IsActive       bool   `json:"is_active"`
+}
+
 // AssignBranchRequest represents the request to assign branchs to a user
 type AssignBranchRequest struct {
 	BranchIDs []string `json:"branch_ids" binding:"required,min=1"`

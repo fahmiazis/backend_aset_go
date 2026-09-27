@@ -20,6 +20,10 @@ func SetupAuthRoutes(rg *gin.RouterGroup) {
 		authenticated.Use(middleware.AuthMiddleware())
 		{
 			authenticated.GET("/me", controllers.GetProfile)
+			// Profil sendiri — tanpa permission, selalu milik user yang login
+			authenticated.PUT("/me/password", controllers.ChangeMyPassword)
+			authenticated.POST("/me/avatar", controllers.UploadMyAvatar)
+			authenticated.DELETE("/me/avatar", controllers.DeleteMyAvatar)
 			authenticated.POST("/logout", controllers.Logout)
 			authenticated.POST("/logout-all", controllers.LogoutAllDevices)
 		}

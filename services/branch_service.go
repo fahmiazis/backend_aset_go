@@ -5,6 +5,7 @@ import (
 	"backend-go/dto"
 	"backend-go/models"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -209,30 +210,47 @@ func AssignBranchsToUser(userID string, req dto.AssignBranchRequest) error {
 	return nil
 }
 
-// GetUserBranchs retrieves all branchs assigned to a user
-func GetUserBranchs(userID string) ([]dto.BranchResponse, error) {
-	var branchs []models.Branch
+// GetUserBranchs retrieves all branchs assigned to a user, termasuk jenis
+// keanggotaannya (homebase/assignment/temporary) dan status aktif homebase.
+func GetUserBranchs(userID string) ([]dto.UserBranchMembershipResponse, error) {
+	type row struct {
+		ID               string
+		BranchCode       string
+		BranchName       string
+		BranchType       string
+		Status           string
+		CreatedAt        time.Time
+		UpdatedAt        time.Time
+		MembershipType   string
+		MembershipActive bool
+	}
+	var rows []row
 
 	err := config.DB.Table("branchs").
+		Select("branchs.id, branchs.branch_code, branchs.branch_name, branchs.branch_type, branchs.status, branchs.created_at, branchs.updated_at, user_branchs.branch_type AS membership_type, user_branchs.is_active AS membership_active").
 		Joins("JOIN user_branchs ON user_branchs.branch_id = branchs.id").
-		Where("user_branchs.user_id = ?", userID).
+		Where("user_branchs.user_id = ? AND branchs.deleted_at IS NULL", userID).
 		Order("branchs.branch_code ASC").
-		Find(&branchs).Error
+		Scan(&rows).Error
 
 	if err != nil {
 		return nil, err
 	}
 
-	response := make([]dto.BranchResponse, len(branchs))
-	for i, branch := range branchs {
-		response[i] = dto.BranchResponse{
-			ID:         branch.ID,
-			BranchCode: branch.BranchCode,
-			BranchName: branch.BranchName,
-			BranchType: branch.BranchType,
-			Status:     branch.Status,
-			CreatedAt:  branch.CreatedAt,
-			UpdatedAt:  branch.UpdatedAt,
+	response := make([]dto.UserBranchMembershipResponse, len(rows))
+	for i, r := range rows {
+		response[i] = dto.UserBranchMembershipResponse{
+			BranchResponse: dto.BranchResponse{
+				ID:         r.ID,
+				BranchCode: r.BranchCode,
+				BranchName: r.BranchName,
+				BranchType: r.BranchType,
+				Status:     r.Status,
+				CreatedAt:  r.CreatedAt,
+				UpdatedAt:  r.UpdatedAt,
+			},
+			MembershipType: r.MembershipType,
+			IsActive:       r.MembershipActive,
 		}
 	}
 

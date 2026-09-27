@@ -70,6 +70,7 @@ func GetUserByID(id string) (*dto.UserDetailResponse, error) {
 		NIK:       user.NIK,
 		MPNNumber: user.MPNNumber,
 		Status:    user.Status,
+		HasAvatar: user.AvatarPath != nil && *user.AvatarPath != "",
 		Roles:     roles,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
