@@ -123,6 +123,22 @@ func emailFlowFor(transactionType string) (emailFlowConfig, error) {
 				return nil, false
 			},
 		}, nil
+	case TxStockOpnameFlow:
+		return emailFlowConfig{
+			waiting:        stockOpnameWaiting,
+			getTransaction: getStockOpnameTransaction,
+			nextStage: func(t *models.Transaction) string {
+				return nextInList([]string{
+					models.StageDraft,
+					models.StageApproval,
+					models.StageStockOpnameExecute,
+					models.StageFinished,
+				}, t.CurrentStage)
+			},
+			approvalFlows: map[string]string{models.StageApproval: models.FlowStockOpnameApproval},
+			finishedStage: models.StageFinished,
+			detailPath:    "/dashboard/stock-opname/",
+		}, nil
 	}
 	return emailFlowConfig{}, fmt.Errorf("jenis transaksi %s tidak didukung", transactionType)
 }

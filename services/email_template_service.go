@@ -51,6 +51,11 @@ var emailTemplateStages = map[string][]string{
 		models.StageHandoverApproval,
 		models.StageHandoverReceiving,
 	},
+	TxStockOpnameFlow: {
+		models.StageDraft,
+		models.StageApproval,
+		models.StageStockOpnameExecute,
+	},
 	// Agreement: CREATE = saat agreement dibuat (belum punya stage),
 	// APPROVAL_AGREEMENT = approve/tolak step agreement
 	TxDisposalAgreement: {

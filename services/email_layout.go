@@ -105,6 +105,8 @@ func transactionTypeLabel(txType string) string {
 		return "Disposal Agreement"
 	case TxHandover:
 		return "Serah Terima Aset"
+	case TxStockOpnameFlow:
+		return "Stock Opname"
 	}
 	return txType
 }
@@ -234,6 +236,10 @@ func buildTransactionSummary(transaction *models.Transaction, ctx emailRenderCon
 		if sell && len(rows) > 0 {
 			summary.totalRow = []string{"", "", "", "Total", formatRupiahEmail(total)}
 		}
+
+	case TxStockOpnameFlow:
+		summary.assetTitle, summary.columns, summary.assetRows = stockOpnameFindingSummary(transaction.ID)
+		summary.rightAligned[1] = true
 
 	case TxHandover:
 		handoverType := handoverTypeOf(transaction)
