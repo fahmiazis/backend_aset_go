@@ -824,8 +824,10 @@ func ReviseProcurement(userID string, transactionNumber string, req dto.RevisePr
 			if err := validateBranchExists(detail.BranchCode); err != nil {
 				return nil, fmt.Errorf("item '%s' detail: %w", item.ItemName, err)
 			}
-			if !isHO && detail.BranchCode != homebase.Branch.BranchCode {
-				return nil, fmt.Errorf("item '%s' detail: only HO users can add details for other branches (your homebase: %s)", item.ItemName, homebase.Branch.BranchCode)
+			// penerima (details) hanya untuk HO — cabang lain mengajukan
+			// untuk homebase-nya sendiri
+			if !isHO {
+				return nil, fmt.Errorf("item '%s': only HO users can add recipients (your homebase: %s)", item.ItemName, homebase.Branch.BranchCode)
 			}
 		}
 	}
