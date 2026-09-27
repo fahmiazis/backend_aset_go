@@ -19,20 +19,12 @@ type StockOpnameReportFilter struct {
 
 // StockOpnameStatusBreakdown adalah bucket status yang dipakai berulang di
 // stats card, chart "status per grouping", dan chart "status submit".
-//
-// Catatan penting soal "Revisi": bucket ini SELALU 0 karena skema data saat
-// ini (transaction_stock_opnames + transactions flow DRAFT->APPROVAL->
-// EXECUTE_STOCK_OPNAME->FINISHED/REJECTED) tidak punya konsep "revisi" —
-// tidak ada stage/status yang merepresentasikan pengembalian temuan untuk
-// direvisi. Field ini dipertahankan supaya bentuk response tetap kompatibel
-// dengan layout referensi; kalau bisnis butuh alur revisi sungguhan, perlu
-// tambahan stage baru di backend, bukan sekadar ubah query report.
 type StockOpnameStatusBreakdown struct {
 	Finish      int64 `json:"finish"`       // current_stage = FINISHED
-	InProgress  int64 `json:"in_progress"`  // current_stage = DRAFT / APPROVAL / EXECUTE_STOCK_OPNAME
+	InProgress  int64 `json:"in_progress"`  // current_stage = DRAFT (belum pernah direvisi) / APPROVAL / EXECUTE_STOCK_OPNAME
 	BelumSubmit int64 `json:"belum_submit"` // asset di scope belum pernah dimasukkan opname periode ini
 	Rejected    int64 `json:"rejected"`     // current_stage = REJECTED
-	Revisi      int64 `json:"revisi"`       // selalu 0, lihat catatan di atas
+	Revisi      int64 `json:"revisi"`       // current_stage = DRAFT hasil ReviseStockOpname (belum di-submit ulang)
 	Disposal    int64 `json:"disposal"`     // asset_status ACTIVE record = DISPOSED / IN_DISPOSAL (di luar cakupan opname normal)
 }
 

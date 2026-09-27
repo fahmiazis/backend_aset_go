@@ -869,6 +869,11 @@ func RejectTransaction(userID string, req dto.RejectTransactionRequest) error {
 		fmt.Printf("auto reject handover warning: %v\n", err)
 	}
 
+	// tolak step approval stock opname = final → REJECTED
+	if err := autoRejectStockOpnameApproval(userID, approval.TransactionNumber, approval.TransactionType, notesText); err != nil {
+		fmt.Printf("auto reject stock opname approval warning: %v\n", err)
+	}
+
 	return nil
 }
 

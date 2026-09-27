@@ -25,6 +25,14 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 		// GET /transactions/stock-opname/photo/:id/file → serve foto (inline), gak dibatasi stage
 		stockOpname.GET("/photo/:id/file", controllers.ServeStockOpnameAssetPhoto)
 
+		// GET /transactions/stock-opname/documentation/download?transaction_number → download excel dokumentasi
+		// foto bukti fisik (daftar aset + foto per baris) — cuma bisa dipanggil
+		// SETELAH submit (bukan DRAFT lagi), karena baru saat itu foto per aset
+		// dijamin lengkap & tervalidasi (lihat SubmitStockOpname).
+		stockOpname.GET("/documentation/download",
+			middleware.RequirePermission("create_transaction"),
+			controllers.DownloadStockOpnameDocumentation)
+
 		// GET /transactions/stock-opname/borrow-document/:id/file → serve dokumen peminjaman (inline), gak dibatasi stage
 		stockOpname.GET("/borrow-document/:id/file", controllers.ServeStockOpnameBorrowDocument)
 
@@ -32,6 +40,23 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 		// Belum ada pembatasan role/permission (nyusul) — cukup login.
 		stockOpname.GET("/config", controllers.GetStockOpnameConfig)
 		stockOpname.PUT("/config", controllers.UpdateStockOpnameConfig)
+
+		// Master data status fisik & kondisi — CREATE + LIST + soft DELETE saja
+		// (tidak ada UPDATE, lihat dto/stock_opname_status_master_dto.go),
+		// kecuali relasi status fisik -> kondisi yang boleh diatur ulang.
+		// Sama seperti /config: belum ada pembatasan role/permission (nyusul).
+		statusMaster := stockOpname.Group("/status-master")
+		{
+			statusMaster.GET("/physical-status", controllers.GetAllStockOpnamePhysicalStatusMasters)
+			statusMaster.POST("/physical-status", controllers.CreateStockOpnamePhysicalStatusMaster)
+			statusMaster.DELETE("/physical-status/:id", controllers.DeleteStockOpnamePhysicalStatusMaster)
+			// PUT .../physical-status/:id/conditions → atur kondisi yang boleh dipilih buat status fisik ini
+			statusMaster.PUT("/physical-status/:id/conditions", controllers.UpdateStockOpnamePhysicalStatusConditions)
+
+			statusMaster.GET("/condition", controllers.GetAllStockOpnameConditionMasters)
+			statusMaster.POST("/condition", controllers.CreateStockOpnameConditionMaster)
+			statusMaster.DELETE("/condition/:id", controllers.DeleteStockOpnameConditionMaster)
+		}
 
 		stockOpnameDraft := stockOpname.Group("/draft")
 		{
@@ -82,6 +107,12 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 
 			// GET /transactions/stock-opname/approval/status?transaction_number → status approval
 			stockOpnameApproval.GET("/status", controllers.GetStockOpnameApprovalStatus)
+
+			// POST /transactions/stock-opname/approval/revise?transaction_number → APPROVAL → DRAFT
+			// Aksi approver sejajar approve/reject: tanpa permission menu, otorisasi
+			// lewat transaction_approval_id yang lagi pending (sama kayak
+			// /transaction-approvals/approve|reject).
+			stockOpnameApproval.POST("/revise", controllers.ReviseStockOpnameByApprover)
 		}
 
 		// POST /transactions/stock-opname/execute?transaction_number → EXECUTE_STOCK_OPNAME → FINISHED
@@ -90,7 +121,13 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 			middleware.RequirePermission("execute_stock_opname"),
 			controllers.ExecuteStockOpname)
 
-		// POST /transactions/stock-opname/reject?transaction_number → REJECTED
+		// POST /transactions/stock-opname/execute/revise?transaction_number → EXECUTE_STOCK_OPNAME → DRAFT
+		// Path-nya sengaja di bawah /execute biar ikut menu & permission eksekusi.
+		stockOpname.POST("/execute/revise",
+			middleware.RequirePermission("execute_stock_opname"),
+			controllers.ReviseStockOpnameByExecutor)
+
+		// POST /transactions/stock-opname/reject?transaction_number → REJECTED (final)
 		stockOpname.POST("/reject",
 			middleware.RequirePermission("reject_transaction"),
 			controllers.RejectStockOpname)

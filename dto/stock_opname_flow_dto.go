@@ -16,19 +16,21 @@ type CreateStockOpnameDraftRequest struct {
 // ============================================================
 // INPUT HASIL TEMUAN FISIK PER ASSET (masih draft)
 //
-// PhysicalStatus punya 3 opsi: EXISTS ("Ada") / MISSING ("Tidak Ada") /
-// BORROWED ("Dipinjam"). Condition punya opsi tambahan NOT_APPLICABLE
-// ("Tidak Ada") yang WAJIB dipakai ketika PhysicalStatus = MISSING atau
-// BORROWED (dan hanya boleh dipakai saat itu) — divalidasi silang di
-// service, bukan cuma lewat oneof di sini. Khusus BORROWED, dokumen
-// peminjaman (PDF) wajib sudah diupload lebih dulu lewat endpoint upload
-// terpisah — juga divalidasi di service.
+// PhysicalStatus & Condition SEKARANG master data (lihat
+// models.StockOpnamePhysicalStatusMaster / StockOpnameConditionMaster,
+// bisa ditambah lewat /transactions/stock-opname/status-master/*) — jadi
+// TIDAK ada lagi binding:"oneof=..." statis di sini, validitas kode +
+// aturan silangnya (kondisi mana yang boleh buat status fisik mana, lihat
+// models.StockOpnamePhysicalConditionRule) dicek di service terhadap data
+// master saat itu. Khusus status yang RequiresBorrowDocument (dulu
+// cuma "BORROWED"), dokumen peminjaman (PDF) wajib sudah diupload lebih
+// dulu lewat endpoint upload terpisah — juga divalidasi di service.
 // ============================================================
 
 type UpdateStockOpnameFindingRequest struct {
 	AssetID        uint    `json:"asset_id" binding:"required"`
-	PhysicalStatus string  `json:"physical_status" binding:"required,oneof=EXISTS MISSING BORROWED"`
-	Condition      string  `json:"condition" binding:"required,oneof=GOOD FAIR POOR BROKEN NOT_APPLICABLE"`
+	PhysicalStatus string  `json:"physical_status" binding:"required"`
+	Condition      string  `json:"condition" binding:"required"`
 	AssetStatus    *string `json:"asset_status" binding:"omitempty,oneof=ACTIVE INACTIVE MAINTENANCE RETIRED"`
 	Notes          *string `json:"notes"`
 }
@@ -88,6 +90,26 @@ type RejectStockOpnameRequest struct {
 }
 
 // ============================================================
+// REVISI
+// ============================================================
+
+// ReviseStockOpnameRequest dipakai eksekutor (stage EXECUTE_STOCK_OPNAME).
+// AssetIDs = asset yang dichecklist buat direvisi; ReviseAll=true berarti
+// semua asset di transaksi (AssetIDs diabaikan).
+type ReviseStockOpnameRequest struct {
+	AssetIDs      []uint `json:"asset_ids"`
+	ReviseAll     bool   `json:"revise_all"`
+	RevisionNotes string `json:"revision_notes" binding:"required,min=5"`
+}
+
+// ReviseStockOpnameByApproverRequest dipakai approver (stage APPROVAL) —
+// sama kayak approve/reject, harus nyebut step approval yang lagi dipegang.
+type ReviseStockOpnameByApproverRequest struct {
+	TransactionApprovalID string `json:"transaction_approval_id" binding:"required"`
+	ReviseStockOpnameRequest
+}
+
+// ============================================================
 // RESPONSES
 // ============================================================
 
@@ -125,6 +147,10 @@ type StockOpnameFlowItemResponse struct {
 	BorrowDocumentURL      *string `json:"borrow_document_url,omitempty"`
 	BorrowDocumentFileName *string `json:"borrow_document_file_name,omitempty"`
 
+	// NeedsRevision: asset ini dichecklist approver/eksekutor buat direvisi.
+	// Kalau RevisionMode di response detail true, cuma item ini yang boleh diubah.
+	NeedsRevision bool `json:"needs_revision"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -139,6 +165,10 @@ type StockOpnameFlowDetailResponse struct {
 	// enggak (lihat SubmitStockOpname). Cuma penanda kepatuhan jadwal —
 	// tidak pernah memblokir submit.
 	IsSubmissive *bool `json:"is_submissive"`
+
+	// RevisionMode: DRAFT hasil revisi — cuma item dengan needs_revision=true
+	// yang boleh diubah, sisanya dikunci. False = draft biasa, semua bisa diubah.
+	RevisionMode bool `json:"revision_mode"`
 }
 
 // ============================================================

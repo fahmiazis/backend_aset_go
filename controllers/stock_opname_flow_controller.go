@@ -161,6 +161,32 @@ func DownloadStockOpnameTemplate(c *gin.Context) {
 	}
 }
 
+// DownloadStockOpnameDocumentation menghasilkan file excel dokumentasi foto
+// bukti fisik (1 aset = 1 baris + foto) — cuma bisa diunduh setelah stock
+// opname disubmit (bukan DRAFT lagi), karena baru saat itu foto per aset
+// dijamin lengkap & tervalidasi.
+func DownloadStockOpnameDocumentation(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	file, filename, err := services.GenerateStockOpnameDocumentationExcel(userID, transactionNumber)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	if err := file.Write(c.Writer); err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, "failed to write excel file: "+err.Error())
+		return
+	}
+}
+
 func UploadStockOpnameTemplate(c *gin.Context) {
 	userID := c.GetString("user_id")
 	transactionNumber := c.Query("transaction_number")
@@ -285,6 +311,52 @@ func RejectStockOpname(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "Stock opname rejected", result)
+}
+
+func ReviseStockOpnameByApprover(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.ReviseStockOpnameByApproverRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.ReviseStockOpnameByApprover(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname returned to draft for revision", result)
+}
+
+func ReviseStockOpnameByExecutor(c *gin.Context) {
+	userID := c.GetString("user_id")
+	transactionNumber := c.Query("transaction_number")
+	if transactionNumber == "" {
+		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
+		return
+	}
+
+	var req dto.ReviseStockOpnameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	result, err := services.ReviseStockOpnameByExecutor(userID, transactionNumber, req)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Stock opname returned to draft for revision", result)
 }
 
 // ============================================================

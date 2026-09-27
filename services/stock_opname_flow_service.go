@@ -4,19 +4,25 @@ import (
 	"backend-go/config"
 	"backend-go/dto"
 	"backend-go/models"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg" // registrasi decoder image/jpeg — dipakai excelize.AddPicture buat baca dimensi foto JPEG
+	"image/png"
 	"io"
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/xuri/excelize/v2"
+	_ "golang.org/x/image/webp" // registrasi decoder image/webp — dipakai resolveStockOpnamePicturePath
 	"gorm.io/gorm"
 )
 
@@ -126,17 +132,28 @@ func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest
 // INPUT / UPDATE TEMUAN FISIK (masih DRAFT)
 // ============================================================
 
-// validateFindingPhysicalConditionPair mencegah kombinasi yang gak mungkin
-// terjadi: kalau fisik aset gak ada di lokasi (MISSING "Tidak Ada" atau
-// BORROWED "Dipinjam"), kondisinya wajib "Tidak Ada" (NOT_APPLICABLE) —
-// dan sebaliknya, kalau fisiknya "Ada" (EXISTS), kondisinya gak boleh
-// NOT_APPLICABLE karena harus dinilai.
-func validateFindingPhysicalConditionPair(physicalStatus, condition string) error {
-	if (physicalStatus == "MISSING" || physicalStatus == "BORROWED") && condition != "NOT_APPLICABLE" {
-		return fmt.Errorf("condition must be NOT_APPLICABLE when physical_status is %s", physicalStatus)
+// validateFindingPhysicalConditionPair memvalidasi bahwa physicalStatus &
+// condition beneran ada di master data (bukan hardcode lagi, lihat
+// services/stock_opname_status_master_service.go) DAN kombinasinya diizinkan
+// oleh relasi status fisik -> kondisi (rules, dari
+// loadStockOpnameConditionRules) — misal "Tidak Ada" gak bisa berkondisi
+// "Baik". Relasinya diatur di master data, bukan hardcode.
+func validateFindingPhysicalConditionPair(
+	physicalMap map[string]models.StockOpnamePhysicalStatusMaster,
+	conditionMap map[string]models.StockOpnameConditionMaster,
+	rules map[string]map[string]bool,
+	physicalStatus, condition string,
+) error {
+	pm, ok := physicalMap[physicalStatus]
+	if !ok {
+		return fmt.Errorf("physical_status tidak valid: %q", physicalStatus)
 	}
-	if physicalStatus == "EXISTS" && condition == "NOT_APPLICABLE" {
-		return errors.New("condition cannot be NOT_APPLICABLE when physical_status is EXISTS")
+	cm, ok := conditionMap[condition]
+	if !ok {
+		return fmt.Errorf("condition tidak valid: %q", condition)
+	}
+	if !rules[physicalStatus][condition] {
+		return fmt.Errorf("kondisi %q tidak diizinkan untuk status fisik %q — atur di master data status", cm.Label, pm.Label)
 	}
 	return nil
 }
@@ -155,7 +172,19 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 		return nil, errors.New("you can only modify your own stock opname draft")
 	}
 
-	if err := validateFindingPhysicalConditionPair(req.PhysicalStatus, req.Condition); err != nil {
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionRules, err := loadStockOpnameConditionRules()
+	if err != nil {
+		return nil, err
+	}
+	if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, conditionRules, req.PhysicalStatus, req.Condition); err != nil {
 		return nil, err
 	}
 
@@ -169,7 +198,11 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 		return nil, err
 	}
 
-	if req.PhysicalStatus == "BORROWED" {
+	if err := ensureStockOpnameAssetEditable(transaction.ID, req.AssetID); err != nil {
+		return nil, err
+	}
+
+	if physicalMap[req.PhysicalStatus].RequiresBorrowDocument {
 		soCfg, err := getOrCreateStockOpnameConfig()
 		if err != nil {
 			return nil, err
@@ -230,6 +263,11 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 		byAssetID[item.AssetID] = item
 	}
 
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	var borrowDocAssetIDs []uint
 	config.DB.Model(&models.StockOpnameBorrowDocument{}).
 		Where("transaction_id = ?", transaction.ID).
@@ -240,6 +278,19 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 	}
 
 	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionRules, err := loadStockOpnameConditionRules()
 	if err != nil {
 		return nil, err
 	}
@@ -258,11 +309,18 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 			continue
 		}
 
+		if revisionActive && !revisionScope[reqItem.AssetID] {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: current.AssetNumber, Message: errStockOpnameAssetNotInRevision,
+			})
+			continue
+		}
+
 		// Value non-empty tapi gak dikenal enum-nya ditolak; string kosong
 		// selalu diloloskan di sini (representasi "field sengaja dikosongkan
 		// lagi" saat user ganti pilihan) — lihat komentar di dto.
 		if reqItem.PhysicalStatus != nil && *reqItem.PhysicalStatus != "" {
-			if _, ok := stockOpnamePhysicalStatusLabel[*reqItem.PhysicalStatus]; !ok {
+			if _, ok := physicalMap[*reqItem.PhysicalStatus]; !ok {
 				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 					Row: rowNum, AssetNumber: current.AssetNumber,
 					Message: fmt.Sprintf("status fisik tidak valid: %q", *reqItem.PhysicalStatus),
@@ -271,7 +329,7 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 			}
 		}
 		if reqItem.Condition != nil && *reqItem.Condition != "" {
-			if _, ok := stockOpnameConditionLabel[*reqItem.Condition]; !ok {
+			if _, ok := conditionMap[*reqItem.Condition]; !ok {
 				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 					Row: rowNum, AssetNumber: current.AssetNumber,
 					Message: fmt.Sprintf("kondisi tidak valid: %q", *reqItem.Condition),
@@ -302,7 +360,7 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 		// masih kosong berarti user masih di tengah proses ngisi cell lain,
 		// belum saatnya divalidasi silang.
 		if effectivePhysical != "" && effectiveCondition != "" {
-			if err := validateFindingPhysicalConditionPair(effectivePhysical, effectiveCondition); err != nil {
+			if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, conditionRules, effectivePhysical, effectiveCondition); err != nil {
 				response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 					Row: rowNum, AssetNumber: current.AssetNumber, Message: err.Error(),
 				})
@@ -310,7 +368,7 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 			}
 		}
 
-		if effectivePhysical == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[current.AssetID] {
+		if physicalMap[effectivePhysical].RequiresBorrowDocument && soCfg.BorrowDocIsRequired && !hasBorrowDoc[current.AssetID] {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: current.AssetNumber,
 				Message: "dokumen peminjaman wajib diupload dulu sebelum menyimpan status Dipinjam",
@@ -386,13 +444,13 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, errors.New("cannot submit stock opname with no assets")
 	}
 
-	var photoAssetIDs []uint
-	config.DB.Model(&models.StockOpnameAssetPhoto{}).
-		Where("transaction_id = ?", transaction.ID).
-		Pluck("asset_id", &photoAssetIDs)
-	hasPhoto := make(map[uint]bool, len(photoAssetIDs))
-	for _, id := range photoAssetIDs {
-		hasPhoto[id] = true
+	var photos []models.StockOpnameAssetPhoto
+	if err := config.DB.Where("transaction_id = ?", transaction.ID).Find(&photos).Error; err != nil {
+		return nil, err
+	}
+	photoByAsset := make(map[uint]models.StockOpnameAssetPhoto, len(photos))
+	for _, p := range photos {
+		photoByAsset[p.AssetID] = p
 	}
 
 	var borrowDocAssetIDs []uint
@@ -409,14 +467,41 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, err
 	}
 
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, err
+	}
+
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+
 	for _, item := range items {
 		if item.PhysicalStatus == "" || item.Condition == "" {
 			return nil, fmt.Errorf("finding not yet filled for asset %s", item.AssetNumber)
 		}
-		if !hasPhoto[item.AssetID] {
+		photo, hasPhoto := photoByAsset[item.AssetID]
+		if !hasPhoto {
 			return nil, fmt.Errorf("foto bukti fisik belum dilampirkan untuk asset %s", item.AssetNumber)
 		}
-		if item.PhysicalStatus == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
+		// Validasi upload-time (lihat UploadStockOpnameAssetPhoto) cuma cek
+		// tanggal modifikasi file relatif ke SAAT UPLOAD — draft yang dibiarkan
+		// lama sebelum di-submit bisa lolos padahal fotonya udah basi. Di sini
+		// dicek ulang relatif ke SAAT SUBMIT, pakai created_at (kapan foto
+		// itu benar-benar sampai ke server), bukan captured_at.
+		// Asset yang dikunci selama revisi di-skip: fotonya udah lolos di
+		// submit sebelumnya dan creator gak bisa upload ulang.
+		lockedByRevision := revisionActive && !revisionScope[item.AssetID]
+		if !lockedByRevision && now.Sub(photo.CreatedAt) > stockOpnamePhotoMaxAge {
+			return nil, fmt.Errorf(
+				"foto bukti fisik untuk asset %s sudah diupload lebih dari 10 hari sebelum submit (upload: %s) — upload ulang foto yang lebih baru",
+				item.AssetNumber, photo.CreatedAt.Format("02 Jan 2006"),
+			)
+		}
+		if physicalMap[item.PhysicalStatus].RequiresBorrowDocument && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
 			return nil, fmt.Errorf("dokumen peminjaman belum dilampirkan untuk asset %s", item.AssetNumber)
 		}
 	}
@@ -446,10 +531,17 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, fmt.Errorf("failed to clear moved draft items: %w", err)
 	}
 
+	// Putaran revisi selesai begitu di-submit ulang — kunci asset dilepas.
+	if err := tx.Where("transaction_id = ?", transaction.ID).
+		Delete(&models.StockOpnameRevisionAsset{}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
 	// IsSubmissive cuma penanda kepatuhan jadwal (dinilai dari tanggal
 	// SUBMIT, bukan tanggal draft dibuat) — gak pernah menghalangi submit
 	// itu sendiri, submit di luar jendela tetap jalan seperti biasa.
-	isSubmissive := isWithinSubmissionWindow(time.Now(), soCfg.SubmissionStartDay, soCfg.SubmissionEndDay)
+	isSubmissive := isWithinSubmissionWindow(now, soCfg.SubmissionStartDay, soCfg.SubmissionEndDay)
 	if err := tx.Model(transaction).Update("is_submissive", isSubmissive).Error; err != nil {
 		tx.Rollback()
 		return nil, err
@@ -770,6 +862,262 @@ func RejectStockOpname(userID string, transactionNumber string, req dto.RejectSt
 }
 
 // ============================================================
+// AUTO-REJECT APPROVAL
+// Dipanggil dari services/approval_service.go:RejectTransaction setelah
+// approver me-reject salah satu step — pasangan autoCompleteStockOpnameApproval.
+// Tanpa ini transaksi nyangkut di APPROVAL dengan approval berstatus rejected.
+// APPROVAL → REJECTED (final, gak bisa direvisi lagi).
+// ============================================================
+
+func autoRejectStockOpnameApproval(userID, transactionNumber, transactionType, notes string) error {
+	if transactionType != TxStockOpnameFlow {
+		return nil
+	}
+
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return err
+	}
+
+	if transaction.CurrentStage != models.StageApproval {
+		return nil
+	}
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageRejected); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	reason := "Rejected by approver"
+	if notes != "" {
+		reason = notes
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageRejected,
+		models.ActionReject, userID, nil, &reason); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	MarkTransactionAsExpired(transactionNumber)
+
+	return tx.Commit().Error
+}
+
+// ============================================================
+// REVISI
+// APPROVAL / EXECUTE_STOCK_OPNAME → DRAFT
+// Ditrigger approver (step yang lagi pending) atau eksekutor, bukan creator.
+// Reviser mencentang asset mana yang perlu dibenerin (atau "revisi semua");
+// selama DRAFT revisi cuma asset itu yang boleh diubah creator, sisanya
+// dikunci (lihat ensureStockOpnameAssetEditable). Beda dengan REJECTED yang
+// final.
+// ============================================================
+
+// ReviseStockOpnameByApprover: revisi dari stage APPROVAL, otorisasinya sama
+// persis dengan approve/reject (approver user/role + branch).
+func ReviseStockOpnameByApprover(userID string, transactionNumber string, req dto.ReviseStockOpnameByApproverRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	if transaction.CurrentStage != models.StageApproval {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageApproval)
+	}
+
+	var approval models.TransactionApproval
+	if err := config.DB.
+		Where("id = ? AND transaction_number = ? AND transaction_type = ?", req.TransactionApprovalID, transactionNumber, TxStockOpnameFlow).
+		First(&approval).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("transaction approval not found for this stock opname")
+		}
+		return nil, err
+	}
+	if approval.Status != "pending" {
+		return nil, errors.New("approval already processed")
+	}
+	if approval.ApproverUserID != nil && *approval.ApproverUserID != userID {
+		return nil, errors.New("you are not authorized to revise this transaction")
+	}
+	if approval.ApproverRoleID != nil {
+		var userRole models.UserRole
+		if err := config.DB.
+			Where("user_id = ? AND role_id = ?", userID, *approval.ApproverRoleID).
+			First(&userRole).Error; err != nil {
+			return nil, errors.New("you do not have the required role to revise this transaction")
+		}
+	}
+	if err := validateApproverBranch(userID, transactionNumber, TxStockOpnameFlow); err != nil {
+		return nil, err
+	}
+
+	return reviseStockOpnameToDraft(userID, transaction, req.AssetIDs, req.ReviseAll, req.RevisionNotes)
+}
+
+// ReviseStockOpnameByExecutor: revisi dari stage EXECUTE_STOCK_OPNAME,
+// otorisasinya lewat permission execute_stock_opname di route.
+func ReviseStockOpnameByExecutor(userID string, transactionNumber string, req dto.ReviseStockOpnameRequest) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+	if transaction.CurrentStage != models.StageStockOpnameExecute {
+		return nil, fmt.Errorf("transaction is not in %s stage", models.StageStockOpnameExecute)
+	}
+
+	return reviseStockOpnameToDraft(userID, transaction, req.AssetIDs, req.ReviseAll, req.RevisionNotes)
+}
+
+// reviseStockOpnameToDraft: item dibalikin dari transaction_stock_opnames ke
+// stock_opname_draft_items (kebalikan SubmitStockOpname), asset yang
+// dichecklist dicatat di stock_opname_revision_assets, approval lama
+// di-soft-delete biar di-initiate ulang dari step pertama setelah submit
+// berikutnya. Foto & dokumen peminjaman gak ikut dipindah — dikunci lewat
+// (transaction_id, asset_id), jadi otomatis kebawa lagi ke draft.
+func reviseStockOpnameToDraft(userID string, transaction *models.Transaction, assetIDs []uint, reviseAll bool, notes string) (*dto.StockOpnameFlowDetailResponse, error) {
+	var itemAssetIDs []uint
+	if err := config.DB.Model(&models.TransactionStockOpname{}).
+		Where("transaction_id = ?", transaction.ID).
+		Pluck("asset_id", &itemAssetIDs).Error; err != nil {
+		return nil, err
+	}
+	inTransaction := make(map[uint]bool, len(itemAssetIDs))
+	for _, id := range itemAssetIDs {
+		inTransaction[id] = true
+	}
+
+	revisionAssetIDs := itemAssetIDs
+	if !reviseAll {
+		seen := make(map[uint]bool, len(assetIDs))
+		revisionAssetIDs = make([]uint, 0, len(assetIDs))
+		for _, id := range assetIDs {
+			if !inTransaction[id] {
+				return nil, fmt.Errorf("asset_id %d not found in this stock opname", id)
+			}
+			if !seen[id] {
+				seen[id] = true
+				revisionAssetIDs = append(revisionAssetIDs, id)
+			}
+		}
+	}
+	if len(revisionAssetIDs) == 0 {
+		return nil, errors.New("pilih minimal 1 asset yang perlu direvisi, atau pakai revisi semua")
+	}
+
+	transactionNumber := transaction.TransactionNumber
+
+	tx := config.DB.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	if err := tx.Exec(`
+		INSERT INTO stock_opname_draft_items
+			(transaction_id, transaction_number, asset_id, asset_number, physical_status, `+"`condition`"+`, asset_status, notes, created_at, updated_at)
+		SELECT transaction_id, transaction_number, asset_id, asset_number, physical_status, `+"`condition`"+`, asset_status, notes, created_at, updated_at
+		FROM transaction_stock_opnames
+		WHERE transaction_id = ?
+	`, transaction.ID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to move active items back to draft table: %w", err)
+	}
+	if err := tx.Exec(`DELETE FROM transaction_stock_opnames WHERE transaction_id = ?`, transaction.ID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to clear moved active items: %w", err)
+	}
+
+	// Sisa putaran revisi sebelumnya (harusnya udah kehapus pas submit)
+	if err := tx.Where("transaction_id = ?", transaction.ID).
+		Delete(&models.StockOpnameRevisionAsset{}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	revisionRows := make([]models.StockOpnameRevisionAsset, len(revisionAssetIDs))
+	for i, id := range revisionAssetIDs {
+		revisionRows[i] = models.StockOpnameRevisionAsset{TransactionID: transaction.ID, AssetID: id, CreatedBy: userID}
+	}
+	if err := tx.CreateInBatches(&revisionRows, 500).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// InitiateTransactionApproval nolak kalau masih ada approval (non-deleted)
+	// untuk transaksi ini, jadi approval putaran lama harus dibuang.
+	if err := tx.Where("transaction_number = ? AND transaction_type = ?", transactionNumber, TxStockOpnameFlow).
+		Delete(&models.TransactionApproval{}).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Model(&models.ApprovalSignature{}).
+		Where("transaction_number = ? AND transaction_type = ?", transactionNumber, TxStockOpnameFlow).
+		Update("is_recent", false).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	fromStage := transaction.CurrentStage
+	if err := updateTransactionStage(tx, transaction, models.StageDraft); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := recordStage(tx, transaction.ID, transactionNumber,
+		fromStage, models.StageDraft,
+		models.ActionRevise, userID, nil, &notes); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return GetStockOpnameFlowDetail(transactionNumber)
+}
+
+// loadStockOpnameRevisionScope: asset yang boleh diubah selama DRAFT revisi.
+// active=false berarti draft biasa (belum pernah direvisi / udah di-submit
+// ulang) — semua asset boleh diubah.
+func loadStockOpnameRevisionScope(transactionID uint) (scope map[uint]bool, active bool, err error) {
+	var ids []uint
+	if err := config.DB.Model(&models.StockOpnameRevisionAsset{}).
+		Where("transaction_id = ?", transactionID).
+		Pluck("asset_id", &ids).Error; err != nil {
+		return nil, false, err
+	}
+	scope = make(map[uint]bool, len(ids))
+	for _, id := range ids {
+		scope[id] = true
+	}
+	return scope, len(ids) > 0, nil
+}
+
+const errStockOpnameAssetNotInRevision = "asset ini tidak termasuk yang diminta revisi — cuma asset yang dichecklist yang boleh diubah"
+
+func ensureStockOpnameAssetEditable(transactionID, assetID uint) error {
+	scope, active, err := loadStockOpnameRevisionScope(transactionID)
+	if err != nil {
+		return err
+	}
+	if active && !scope[assetID] {
+		return errors.New(errStockOpnameAssetNotInRevision)
+	}
+	return nil
+}
+
+// ============================================================
 // GET DETAIL
 // ============================================================
 
@@ -820,15 +1168,11 @@ func historyItemToRow(i models.StockOpnameItemHistory) stockOpnameItemRow {
 	}
 }
 
-func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDetailResponse, error) {
-	transaction, err := getStockOpnameTransaction(transactionNumber)
-	if err != nil {
-		return nil, err
-	}
-
-	// Item stock opname sekarang tersebar di 3 tabel tergantung stage:
-	// DRAFT -> stock_opname_draft_items, FINISHED -> stock_opname_item_history,
-	// selain itu (APPROVAL/EXECUTE_STOCK_OPNAME/REJECTED) -> transaction_stock_opnames.
+// getStockOpnameItemRows membaca item stock opname dari tabel yang tepat
+// sesuai stage transaksinya (lihat komentar stockOpnameItemRow) — dipakai
+// bareng oleh GetStockOpnameFlowDetail dan GenerateStockOpnameDocumentationExcel
+// biar logic "baca dari tabel yang mana" gak keduplikasi.
+func getStockOpnameItemRows(transaction *models.Transaction) []stockOpnameItemRow {
 	var itemRows []stockOpnameItemRow
 	switch transaction.CurrentStage {
 	case models.StageDraft:
@@ -850,6 +1194,19 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 			itemRows = append(itemRows, activeItemToRow(it))
 		}
 	}
+	return itemRows
+}
+
+func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDetailResponse, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	// Item stock opname sekarang tersebar di 3 tabel tergantung stage:
+	// DRAFT -> stock_opname_draft_items, FINISHED -> stock_opname_item_history,
+	// selain itu (APPROVAL/EXECUTE_STOCK_OPNAME/REJECTED) -> transaction_stock_opnames.
+	itemRows := getStockOpnameItemRows(transaction)
 
 	var stages []models.TransactionStage
 	config.DB.
@@ -871,9 +1228,15 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 		borrowDocByAssetID[d.AssetID] = d
 	}
 
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	itemResponses := make([]dto.StockOpnameFlowItemResponse, len(itemRows))
 	for i, item := range itemRows {
 		itemResponses[i] = buildStockOpnameItemResponse(item, photoByAssetID[item.AssetID], borrowDocByAssetID[item.AssetID])
+		itemResponses[i].NeedsRevision = revisionScope[item.AssetID]
 	}
 
 	return &dto.StockOpnameFlowDetailResponse{
@@ -881,6 +1244,7 @@ func GetStockOpnameFlowDetail(transactionNumber string) (*dto.StockOpnameFlowDet
 		Items:        itemResponses,
 		Stages:       mapTransactionStagesToResponse(stages),
 		IsSubmissive: transaction.IsSubmissive,
+		RevisionMode: revisionActive,
 	}, nil
 }
 
@@ -1015,34 +1379,74 @@ func GetAllStockOpnameDrafts(filter StockOpnameListFilter) ([]dto.StockOpnameFlo
 // ============================================================
 // EXCEL TEMPLATE — label <-> enum mapping
 // Dipakai bersama oleh download (enum -> label) dan upload (label -> enum).
+//
+// Physical status & condition SEKARANG master data (bukan map hardcode
+// lagi) — codeToLabel/labelToCode di bawah dibangun on-the-fly dari
+// loadStockOpnamePhysicalStatusMap()/loadStockOpnameConditionMap() supaya
+// status/kondisi baru yang ditambah admin lewat
+// /transactions/stock-opname/status-master/* otomatis kepake juga di excel.
+// Asset status TETAP hardcode (di luar scope master data ini).
 // ============================================================
 
-var stockOpnamePhysicalStatusLabel = map[string]string{
-	"EXISTS":   "Ada",
-	"MISSING":  "Tidak Ada",
-	"BORROWED": "Dipinjam",
+func codeToLabelPhysicalStatus(m map[string]models.StockOpnamePhysicalStatusMaster) map[string]string {
+	out := make(map[string]string, len(m))
+	for code, row := range m {
+		out[code] = row.Label
+	}
+	return out
 }
 
-var stockOpnamePhysicalStatusValue = map[string]string{
-	"ada":       "EXISTS",
-	"tidak ada": "MISSING",
-	"dipinjam":  "BORROWED",
+func labelToCodePhysicalStatus(m map[string]models.StockOpnamePhysicalStatusMaster) map[string]string {
+	out := make(map[string]string, len(m))
+	for code, row := range m {
+		out[strings.ToLower(strings.TrimSpace(row.Label))] = code
+	}
+	return out
 }
 
-var stockOpnameConditionLabel = map[string]string{
-	"GOOD":           "Baik",
-	"FAIR":           "Cukup",
-	"POOR":           "Kurang",
-	"BROKEN":         "Rusak Berat",
-	"NOT_APPLICABLE": "Tidak Ada",
+func codeToLabelCondition(m map[string]models.StockOpnameConditionMaster) map[string]string {
+	out := make(map[string]string, len(m))
+	for code, row := range m {
+		out[code] = row.Label
+	}
+	return out
 }
 
-var stockOpnameConditionValue = map[string]string{
-	"baik":        "GOOD",
-	"cukup":       "FAIR",
-	"kurang":      "POOR",
-	"rusak berat": "BROKEN",
-	"tidak ada":   "NOT_APPLICABLE",
+func labelToCodeCondition(m map[string]models.StockOpnameConditionMaster) map[string]string {
+	out := make(map[string]string, len(m))
+	for code, row := range m {
+		out[strings.ToLower(strings.TrimSpace(row.Label))] = code
+	}
+	return out
+}
+
+// sortedLabels: dipakai buat nyusun teks hint header excel (mis. "Status
+// Fisik (Ada/Tidak Ada/Dipinjam)") supaya opsi baru dari master data ikut
+// kelihatan tanpa perlu ubah kode tiap kali admin nambah status.
+func sortedLabelsPhysicalStatus(m map[string]models.StockOpnamePhysicalStatusMaster) []string {
+	rows := make([]models.StockOpnamePhysicalStatusMaster, 0, len(m))
+	for _, row := range m {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	labels := make([]string, len(rows))
+	for i, row := range rows {
+		labels[i] = row.Label
+	}
+	return labels
+}
+
+func sortedLabelsCondition(m map[string]models.StockOpnameConditionMaster) []string {
+	rows := make([]models.StockOpnameConditionMaster, 0, len(m))
+	for _, row := range m {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	labels := make([]string, len(rows))
+	for i, row := range rows {
+		labels[i] = row.Label
+	}
+	return labels
 }
 
 var stockOpnameAssetStatusLabel = map[string]string{
@@ -1085,14 +1489,41 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 		return nil, "", err
 	}
 
+	// Selama DRAFT revisi, template cuma berisi asset yang dichecklist —
+	// asset lain dikunci, jadi gak ada gunanya ikut diisi.
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	if revisionActive {
+		editable := items[:0]
+		for _, item := range items {
+			if revisionScope[item.AssetID] {
+				editable = append(editable, item)
+			}
+		}
+		items = editable
+	}
+
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, "", err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, "", err
+	}
+	physicalStatusLabel := codeToLabelPhysicalStatus(physicalMap)
+	conditionLabel := codeToLabelCondition(conditionMap)
+
 	f := excelize.NewFile()
 	f.SetSheetName("Sheet1", stockOpnameTemplateSheet)
 
 	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
 	headers := []string{
 		"No", "Nomor Asset", "Nama Asset", "Kategori",
-		"Status Fisik (Ada/Tidak Ada)",
-		"Kondisi (Baik/Cukup/Kurang/Rusak Berat/Tidak Ada)",
+		fmt.Sprintf("Status Fisik (%s)", strings.Join(sortedLabelsPhysicalStatus(physicalMap), "/")),
+		fmt.Sprintf("Kondisi (%s)", strings.Join(sortedLabelsCondition(conditionMap), "/")),
 		"Status Aset (opsional, kosongkan jika tidak berubah)",
 		"Catatan",
 	}
@@ -1121,8 +1552,8 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 			item.AssetNumber,
 			assetName,
 			categoryName,
-			stockOpnamePhysicalStatusLabel[item.PhysicalStatus],
-			stockOpnameConditionLabel[item.Condition],
+			physicalStatusLabel[item.PhysicalStatus],
+			conditionLabel[item.Condition],
 			stockOpnameAssetStatusLabel[item.AssetStatus],
 			notes,
 		}
@@ -1140,6 +1571,186 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 	safeName := strings.NewReplacer("/", "-", " ", "_").Replace(transactionNumber)
 	filename := fmt.Sprintf("stock_opname_template_%s.xlsx", safeName)
 	return f, filename, nil
+}
+
+// ============================================================
+// EXCEL DOKUMENTASI FOTO (download setelah submit)
+//
+// Beda dari template di atas (dipakai buat ISI temuan pas DRAFT), file ini
+// buat bukti dokumentasi fisik ke pihak lain (auditor dst) — daftar aset +
+// foto bukti fisiknya dalam 1 file excel. Cuma bisa diunduh SETELAH submit,
+// karena baru saat itu foto per asset dijamin lengkap & tervalidasi (lihat
+// SubmitStockOpname bagian 7.9 di feature flow doc).
+// ============================================================
+
+const stockOpnameDocumentationSheet = "Dokumentasi"
+
+func GenerateStockOpnameDocumentationExcel(userID, transactionNumber string) (*excelize.File, string, error) {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return nil, "", err
+	}
+	if transaction.CreatedBy != userID {
+		return nil, "", errors.New("you can only download the documentation for your own stock opname")
+	}
+	if transaction.CurrentStage == models.StageDraft {
+		return nil, "", errors.New("dokumentasi baru bisa diunduh setelah stock opname disubmit (foto bukti fisik belum tervalidasi lengkap)")
+	}
+
+	itemRows := getStockOpnameItemRows(transaction)
+
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, "", err
+	}
+	conditionLabel := codeToLabelCondition(conditionMap)
+
+	var photos []models.StockOpnameAssetPhoto
+	config.DB.Where("transaction_id = ?", transaction.ID).Find(&photos)
+	photoByAssetID := make(map[uint]models.StockOpnameAssetPhoto, len(photos))
+	for _, p := range photos {
+		photoByAssetID[p.AssetID] = p
+	}
+
+	// Semua aset di 1 stock opname selalu dari branch yang sama (lihat
+	// bagian 3 di feature flow doc), jadi cukup resolve nama branch sekali
+	// dari aset pertama yang punya branch_code.
+	var branchName string
+	for _, item := range itemRows {
+		if item.Asset != nil && item.Asset.BranchCode != nil && *item.Asset.BranchCode != "" {
+			if b, err := GetBranchByKode(*item.Asset.BranchCode); err == nil {
+				branchName = b.BranchName
+			}
+			break
+		}
+	}
+
+	f := excelize.NewFile()
+	f.SetSheetName("Sheet1", stockOpnameDocumentationSheet)
+
+	titleStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true, Underline: "single", Size: 12}})
+	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}, Border: []excelize.Border{
+		{Type: "top", Color: "000000", Style: 1}, {Type: "bottom", Color: "000000", Style: 1},
+		{Type: "left", Color: "000000", Style: 1}, {Type: "right", Color: "000000", Style: 1},
+	}})
+	cellStyle, _ := f.NewStyle(&excelize.Style{Border: []excelize.Border{
+		{Type: "top", Color: "000000", Style: 1}, {Type: "bottom", Color: "000000", Style: 1},
+		{Type: "left", Color: "000000", Style: 1}, {Type: "right", Color: "000000", Style: 1},
+	}})
+
+	titleCell := fmt.Sprintf("DOKUMENTASI ASSET STOCK OPNAME %s", transactionNumber)
+	f.SetCellValue(stockOpnameDocumentationSheet, "A1", titleCell)
+	f.MergeCell(stockOpnameDocumentationSheet, "A1", "J1")
+	f.SetCellStyle(stockOpnameDocumentationSheet, "A1", "A1", titleStyle)
+
+	headers := []string{"NO", "NO. ASET", "DESKRIPSI", "PLANT", "AREA", "SATUAN", "KONDISI", "LOKASI", "GROUPING", "PICTURE"}
+	headerRow := 3
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, headerRow)
+		f.SetCellValue(stockOpnameDocumentationSheet, cell, h)
+		f.SetCellStyle(stockOpnameDocumentationSheet, cell, cell, headerStyle)
+	}
+
+	colWidths := map[string]float64{
+		"A": 6, "B": 18, "C": 28, "D": 10, "E": 16, "F": 10, "G": 14, "H": 16, "I": 14, "J": 28,
+	}
+	for col, w := range colWidths {
+		f.SetColWidth(stockOpnameDocumentationSheet, col, col, w)
+	}
+
+	const documentationRowHeight = 110.0
+
+	for i, item := range itemRows {
+		row := headerRow + 1 + i
+		f.SetRowHeight(stockOpnameDocumentationSheet, row, documentationRowHeight)
+
+		var assetName, unitOfMeasure, location, grouping, plant string
+		if item.Asset != nil {
+			assetName = item.Asset.AssetName
+			if item.Asset.UnitOfMeasure != nil {
+				unitOfMeasure = *item.Asset.UnitOfMeasure
+			}
+			if item.Asset.Location != nil {
+				location = *item.Asset.Location
+			}
+			if item.Asset.Grouping != nil {
+				grouping = *item.Asset.Grouping
+			}
+			if item.Asset.BranchCode != nil {
+				plant = *item.Asset.BranchCode
+			}
+		}
+
+		values := []interface{}{
+			i + 1, item.AssetNumber, assetName, plant, branchName,
+			unitOfMeasure, conditionLabel[item.Condition], location, grouping,
+		}
+		firstCell, _ := excelize.CoordinatesToCellName(1, row)
+		lastCell, _ := excelize.CoordinatesToCellName(len(headers), row)
+		f.SetCellStyle(stockOpnameDocumentationSheet, firstCell, lastCell, cellStyle)
+		for col, v := range values {
+			cell, _ := excelize.CoordinatesToCellName(col+1, row)
+			f.SetCellValue(stockOpnameDocumentationSheet, cell, v)
+		}
+
+		if photo, ok := photoByAssetID[item.AssetID]; ok {
+			if picturePath, cleanup, err := resolveStockOpnamePicturePath(photo.FilePath); err == nil {
+				pictureCell, _ := excelize.CoordinatesToCellName(len(headers), row)
+				_ = f.AddPicture(stockOpnameDocumentationSheet, pictureCell, picturePath, &excelize.GraphicOptions{
+					AutoFit:         true,
+					LockAspectRatio: true,
+					OffsetX:         4,
+					OffsetY:         4,
+				})
+				if cleanup != nil {
+					cleanup()
+				}
+			}
+		}
+	}
+
+	safeName := strings.NewReplacer("/", "-", " ", "_").Replace(transactionNumber)
+	filename := fmt.Sprintf("stock_opname_dokumentasi_%s.xlsx", safeName)
+	return f, filename, nil
+}
+
+// resolveStockOpnamePicturePath menyiapkan path file gambar yang siap dipakai
+// excelize.AddPicture. Excelize gak dukung embed WEBP langsung (cuma
+// EMF/EMZ/GIF/ICO/JPEG/JPG/PNG/SVG/TIF/TIFF/WMF/WMZ) — padahal foto stock
+// opname boleh diupload dalam format WEBP (lihat UploadStockOpnameAssetPhoto)
+// — jadi buat foto WEBP kita decode lalu re-encode ke PNG sementara di temp
+// dir. Format lain (jpg/jpeg/png) dipakai langsung dari path aslinya, gak
+// ada file sementara yang perlu dibersihkan (cleanup == nil).
+func resolveStockOpnamePicturePath(originalPath string) (path string, cleanup func(), err error) {
+	ext := strings.ToLower(filepath.Ext(originalPath))
+	if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
+		if _, statErr := os.Stat(originalPath); statErr != nil {
+			return "", nil, statErr
+		}
+		return originalPath, nil, nil
+	}
+
+	data, readErr := os.ReadFile(originalPath)
+	if readErr != nil {
+		return "", nil, readErr
+	}
+	img, _, decodeErr := image.Decode(bytes.NewReader(data))
+	if decodeErr != nil {
+		return "", nil, decodeErr
+	}
+
+	tmpFile, tmpErr := os.CreateTemp("", "stock_opname_photo_*.png")
+	if tmpErr != nil {
+		return "", nil, tmpErr
+	}
+	if encodeErr := png.Encode(tmpFile, img); encodeErr != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", nil, encodeErr
+	}
+	tmpFile.Close()
+
+	return tmpFile.Name(), func() { os.Remove(tmpFile.Name()) }, nil
 }
 
 // ============================================================
@@ -1189,6 +1800,11 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 		itemByAssetNumber[item.AssetNumber] = item
 	}
 
+	revisionScope, revisionActive, err := loadStockOpnameRevisionScope(transaction.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	var borrowDocAssetIDs []uint
 	config.DB.Model(&models.StockOpnameBorrowDocument{}).
 		Where("transaction_id = ?", transaction.ID).
@@ -1202,6 +1818,21 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 	if err != nil {
 		return nil, err
 	}
+
+	physicalMap, err := loadStockOpnamePhysicalStatusMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionMap, err := loadStockOpnameConditionMap()
+	if err != nil {
+		return nil, err
+	}
+	conditionRules, err := loadStockOpnameConditionRules()
+	if err != nil {
+		return nil, err
+	}
+	physicalStatusValue := labelToCodePhysicalStatus(physicalMap)
+	conditionValue := labelToCodeCondition(conditionMap)
 
 	response := &dto.StockOpnameTemplateUploadResponse{Errors: []dto.StockOpnameTemplateRowError{}}
 
@@ -1225,30 +1856,39 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 			continue
 		}
 
-		physicalLabel := strings.ToLower(cellAt(row, 4))
-		conditionLabel := strings.ToLower(cellAt(row, 5))
+		if revisionActive && !revisionScope[item.AssetID] {
+			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
+				Row: rowNum, AssetNumber: assetNumber, Message: errStockOpnameAssetNotInRevision,
+			})
+			continue
+		}
+
+		physicalLabelCell := strings.ToLower(cellAt(row, 4))
+		conditionLabelCell := strings.ToLower(cellAt(row, 5))
 		assetStatusLabel := strings.ToLower(cellAt(row, 6))
 		notesCell := cellAt(row, 7)
 
-		physicalStatus, ok := stockOpnamePhysicalStatusValue[physicalLabel]
+		physicalStatus, ok := physicalStatusValue[physicalLabelCell]
 		if !ok {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
-				Message: fmt.Sprintf("status fisik tidak valid: %q (harus Ada / Tidak Ada / Dipinjam)", cellAt(row, 4)),
+				Message: fmt.Sprintf("status fisik tidak valid: %q (harus salah satu: %s)",
+					cellAt(row, 4), strings.Join(sortedLabelsPhysicalStatus(physicalMap), " / ")),
 			})
 			continue
 		}
 
-		condition, ok := stockOpnameConditionValue[conditionLabel]
+		condition, ok := conditionValue[conditionLabelCell]
 		if !ok {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
-				Message: fmt.Sprintf("kondisi tidak valid: %q", cellAt(row, 5)),
+				Message: fmt.Sprintf("kondisi tidak valid: %q (harus salah satu: %s)",
+					cellAt(row, 5), strings.Join(sortedLabelsCondition(conditionMap), " / ")),
 			})
 			continue
 		}
 
-		if err := validateFindingPhysicalConditionPair(physicalStatus, condition); err != nil {
+		if err := validateFindingPhysicalConditionPair(physicalMap, conditionMap, conditionRules, physicalStatus, condition); err != nil {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
 				Message: err.Error(),
@@ -1256,7 +1896,7 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 			continue
 		}
 
-		if physicalStatus == "BORROWED" && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
+		if physicalMap[physicalStatus].RequiresBorrowDocument && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
 			response.Errors = append(response.Errors, dto.StockOpnameTemplateRowError{
 				Row: rowNum, AssetNumber: assetNumber,
 				Message: "dokumen peminjaman wajib diupload dulu lewat aplikasi sebelum status Dipinjam bisa disimpan",
@@ -1371,6 +2011,10 @@ func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetI
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("asset not found in this stock opname")
 		}
+		return nil, err
+	}
+
+	if err := ensureStockOpnameAssetEditable(transaction.ID, assetID); err != nil {
 		return nil, err
 	}
 
@@ -1532,6 +2176,10 @@ func UploadStockOpnameBorrowDocument(userID string, transactionNumber string, as
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("asset not found in this stock opname")
 		}
+		return nil, err
+	}
+
+	if err := ensureStockOpnameAssetEditable(transaction.ID, assetID); err != nil {
 		return nil, err
 	}
 
