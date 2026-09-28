@@ -1323,9 +1323,13 @@ type StockOpnameListFilter struct {
 	Limit        int     `form:"limit"`
 }
 
-func GetAllStockOpnameDrafts(filter StockOpnameListFilter) ([]dto.StockOpnameFlowDetailResponse, int64, error) {
+func GetAllStockOpnameDrafts(filter StockOpnameListFilter, viewer AssetViewer) ([]dto.StockOpnameFlowDetailResponse, int64, error) {
 	query := config.DB.Model(&models.Transaction{}).
 		Where("transaction_type = ?", TxStockOpnameFlow)
+
+	// Stock opname dibuat untuk homebase aktif pembuat, dan kode cabang itu
+	// yang tertanam di segmen kedua nomor transaksi. Admin melihat semua.
+	query = applyOriginBranchScope(query, listBranchScope(viewer))
 
 	if filter.Status != nil {
 		query = query.Where("status = ?", *filter.Status)

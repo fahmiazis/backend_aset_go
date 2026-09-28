@@ -30,6 +30,10 @@ func CreateMutation(c *gin.Context) {
 func GetMutationByNumber(c *gin.Context) {
 	transactionNumber := c.Param("number")
 
+	if denyIfCannotViewTransaction(c, transactionNumber, services.TxMutation) {
+		return
+	}
+
 	mutation, err := services.GetMutationByTransactionNumber(transactionNumber)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
@@ -58,7 +62,7 @@ func GetAllMutations(c *gin.Context) {
 	// bisa mengintip daftar tugas orang lain.
 	filter.ViewerUserID = c.GetString("user_id")
 
-	mutations, total, err := services.GetAllMutations(filter)
+	mutations, total, err := services.GetAllMutations(filter, assetViewer(c))
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return

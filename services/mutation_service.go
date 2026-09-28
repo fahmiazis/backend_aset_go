@@ -131,8 +131,11 @@ func GetMutationByTransactionNumber(transactionNumber string) (*dto.MutationResp
 	}, nil
 }
 
-func GetAllMutations(filter dto.TransactionListFilter) ([]dto.MutationResponse, int64, error) {
+func GetAllMutations(filter dto.TransactionListFilter, viewer AssetViewer) ([]dto.MutationResponse, int64, error) {
 	query := config.DB.Model(&models.Transaction{}).Where("transaction_type = ?", TxMutation)
+
+	// Cabang asal atau tujuan harus milik user; admin melihat semua.
+	query = applyMutationBranchScope(query, listBranchScope(viewer))
 
 	if filter.Status != nil {
 		query = query.Where("status = ?", *filter.Status)

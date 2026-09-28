@@ -40,6 +40,10 @@ func GetDisposalDetail(c *gin.Context) {
 		return
 	}
 
+	if denyIfCannotViewTransaction(c, transactionNumber, services.TxDisposalFlow) {
+		return
+	}
+
 	result, err := services.GetDisposalDetail(transactionNumber)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
@@ -87,7 +91,7 @@ func GetAllDisposals(c *gin.Context) {
 		filter.EndDate = &v
 	}
 
-	results, total, err := services.GetAllDisposals(filter)
+	results, total, err := services.GetAllDisposals(filter, assetViewer(c))
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return

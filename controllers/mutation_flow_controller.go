@@ -39,6 +39,10 @@ func GetMutationDetail(c *gin.Context) {
 		return
 	}
 
+	if denyIfCannotViewTransaction(c, transactionNumber, services.TxMutation) {
+		return
+	}
+
 	result, err := services.GetMutationDetail(transactionNumber)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusNotFound, err.Error())

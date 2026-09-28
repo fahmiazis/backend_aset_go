@@ -287,6 +287,10 @@ func GetProcurementDetailWithStage(c *gin.Context) {
 		return
 	}
 
+	if denyIfCannotViewTransaction(c, transactionNumber, services.TxProcurement) {
+		return
+	}
+
 	result, err := services.GetProcurementDetailWithStage(transactionNumber)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusNotFound, err.Error())

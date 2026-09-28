@@ -30,6 +30,10 @@ func CreateProcurement(c *gin.Context) {
 func GetProcurementByNumber(c *gin.Context) {
 	transactionNumber := c.Query("number")
 
+	if denyIfCannotViewTransaction(c, transactionNumber, services.TxProcurement) {
+		return
+	}
+
 	procurement, err := services.GetProcurementByTransactionNumber(transactionNumber)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
@@ -58,7 +62,7 @@ func GetAllProcurements(c *gin.Context) {
 	// bisa mengintip daftar tugas orang lain.
 	filter.ViewerUserID = c.GetString("user_id")
 
-	procurements, total, err := services.GetAllProcurements(filter)
+	procurements, total, err := services.GetAllProcurements(filter, assetViewer(c))
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return

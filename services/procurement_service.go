@@ -198,8 +198,14 @@ func GetProcurementByTransactionNumber(transactionNumber string) (*dto.Procureme
 	}, nil
 }
 
-func GetAllProcurements(filter dto.TransactionListFilter) ([]dto.ProcurementResponse, int64, error) {
+func GetAllProcurements(filter dto.TransactionListFilter, viewer AssetViewer) ([]dto.ProcurementResponse, int64, error) {
 	query := config.DB.Model(&models.Transaction{}).Where("transaction_type = ?", TxProcurement)
+
+	// Batasi ke cabang milik user (homebase + assignment/temporary di
+	// user_branchs), admin melihat semua — sama dengan report procurement.
+	// Cabang transaksi = segmen kedua nomor transaksi (lihat reportBranchExpr).
+	// Berlaku juga untuk angka tab/kartu karena memakai endpoint ini.
+	query = applyOriginBranchScope(query, listBranchScope(viewer))
 
 	if filter.Status != nil {
 		query = query.Where("status = ?", *filter.Status)

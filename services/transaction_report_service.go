@@ -81,6 +81,36 @@ func baseReportQuery(txType string, filter dto.TransactionReportFilter) *gorm.DB
 	return query
 }
 
+// listBranchScope — scope cabang untuk halaman daftar transaksi (tanpa filter
+// branch_code dari client). Aturannya sama dengan report: admin semua,
+// non-admin cabang miliknya di user_branchs.
+func listBranchScope(viewer AssetViewer) reportScope {
+	codes, all := AssetBranchScope(viewer)
+	return reportScope{codes: codes, all: all}
+}
+
+// applyMutationBranchScope — mutasi terlihat oleh cabang asal MAUPUN tujuan:
+// from_branch_code / to_branch_code per aset, plus cabang pengaju (nomor
+// transaksi) supaya draft yang belum berisi aset tetap terlihat pembuatnya,
+// dan mutation_to_branch_code di header. Baris aset ada di dua tabel:
+// transaction_mutation_assets (flow sekarang) dan transaction_mutations
+// (endpoint lama /mutation).
+func applyMutationBranchScope(query *gorm.DB, scope reportScope) *gorm.DB {
+	if scope.all {
+		return query
+	}
+	if len(scope.codes) == 0 {
+		return query.Where("1 = 0")
+	}
+	c := scope.codes
+	return query.Where("("+reportBranchExpr+" IN ? OR transactions.mutation_to_branch_code IN ?"+
+		" OR transactions.id IN (SELECT ma.transaction_id FROM transaction_mutation_assets ma"+
+		" WHERE ma.from_branch_code IN ? OR ma.to_branch_code IN ?)"+
+		" OR transactions.id IN (SELECT tm.transaction_id FROM transaction_mutations tm"+
+		" WHERE tm.from_branch_code IN ? OR tm.to_branch_code IN ?))",
+		c, c, c, c, c, c)
+}
+
 // applyOriginBranchScope — cabang pengaju saja (procurement, disposal).
 func applyOriginBranchScope(query *gorm.DB, scope reportScope) *gorm.DB {
 	if scope.all {

@@ -39,6 +39,10 @@ func GetStockOpnameFlowDetail(c *gin.Context) {
 		return
 	}
 
+	if denyIfCannotViewTransaction(c, transactionNumber, services.TxStockOpnameFlow) {
+		return
+	}
+
 	result, err := services.GetStockOpnameFlowDetail(transactionNumber)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusNotFound, err.Error())
@@ -73,7 +77,7 @@ func GetAllStockOpnamesFlow(c *gin.Context) {
 		filter.EndDate = &endDate
 	}
 
-	results, total, err := services.GetAllStockOpnameDrafts(filter)
+	results, total, err := services.GetAllStockOpnameDrafts(filter, assetViewer(c))
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return

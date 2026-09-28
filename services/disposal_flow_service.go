@@ -1759,9 +1759,13 @@ func GetDisposalDetail(transactionNumber string) (*dto.DisposalDetailResponse, e
 // GET ALL DISPOSALS
 // ============================================================
 
-func GetAllDisposals(filter dto.DisposalListFilter) ([]dto.DisposalDetailResponse, int64, error) {
+func GetAllDisposals(filter dto.DisposalListFilter, viewer AssetViewer) ([]dto.DisposalDetailResponse, int64, error) {
 	query := config.DB.Model(&models.Transaction{}).
 		Where("transaction_type = ?", TxDisposalFlow)
+
+	// Cabang pengaju (segmen kedua nomor transaksi) harus milik user; admin
+	// melihat semua. Sama dengan report disposal.
+	query = applyOriginBranchScope(query, listBranchScope(viewer))
 
 	if filter.DisposalType != nil {
 		query = query.Where("disposal_type = ?", *filter.DisposalType)
