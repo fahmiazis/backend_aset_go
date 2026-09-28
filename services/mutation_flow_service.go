@@ -972,16 +972,35 @@ func GetMutationAttachmentStatus(transactionNumber string, transactionID uint) (
 // HELPERS
 // ============================================================
 
-// checkAllMutationAttachments memastikan dokumen serah terima seluruh aset
-// sudah disetujui. Dipakai saat cabang tujuan mengonfirmasi penerimaan —
-// satu-satunya titik di alur mutasi yang mensyaratkan dokumen.
-func checkAllMutationAttachments(transactionNumber string, transactionID uint) (bool, error) {
+// checkAllMutationAttachments memastikan dokumen serah terima wajib seluruh
+// aset sudah DIUNGGAH (pending atau approved) dan tidak ada yang ditolak.
+// Tidak perlu menunggu approved — sama dengan aturan dokumen DRAFT di
+// checkAttachmentCanProceed. Dipakai saat cabang tujuan mengonfirmasi
+// penerimaan, satu-satunya titik di alur mutasi yang mensyaratkan dokumen.
+//
+// can_proceed/all_can_proceed di response status sengaja tidak diubah: itu
+// tetap berarti "semua sudah disetujui" untuk badge di UI.
+func checkAllMutationAttachments(transactionNumber string, transactionID uint) error {
 	status, err := GetMutationAttachmentStatus(transactionNumber, transactionID)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	return status.AllCanProceed, nil
+	var missing, rejected []string
+	for _, a := range status.Assets {
+		if a.TotalRejected > 0 {
+			rejected = append(rejected, a.AssetNumber)
+		} else if a.TotalApproved+a.TotalPending < a.TotalRequired {
+			missing = append(missing, a.AssetNumber)
+		}
+	}
+	if len(rejected) > 0 {
+		return fmt.Errorf("receiving documents were rejected for asset(s): %s, please re-upload them", strings.Join(rejected, ", "))
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required receiving documents not yet uploaded for asset(s): %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func mapMutationAttachmentToResponse(att models.TransactionMutationAttachment) dto.MutationAttachmentResponse {
@@ -1037,13 +1056,9 @@ func ConfirmMutationReceiving(userID string, transactionNumber string, notes *st
 		return nil, fmt.Errorf("only users from branch %s can confirm receiving", *transaction.MutationToBranchCode)
 	}
 
-	// Cek semua attachment serah terima sudah diupload dan approved
-	allAttachmentOK, err := checkAllMutationAttachments(transactionNumber, transaction.ID)
-	if err != nil {
+	// Cek semua dokumen serah terima wajib sudah diunggah (tidak harus approved)
+	if err := checkAllMutationAttachments(transactionNumber, transaction.ID); err != nil {
 		return nil, err
-	}
-	if !allAttachmentOK {
-		return nil, errors.New("not all required receiving documents are approved for all assets")
 	}
 
 	tx := config.DB.Begin()
