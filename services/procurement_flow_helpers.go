@@ -428,6 +428,8 @@ func GetProcurementDetailWithStage(transactionNumber string) (*dto.ProcurementDe
 		grResponses[i] = mapAssetGRToResponse(gr)
 	}
 
+	ioNumbers := procurementIONumbers(transaction.ID)
+
 	return &dto.ProcurementDetailWithStageResponse{
 		Transaction: dto.ProcurementTransactionResponse{
 			ID:                transaction.ID,
@@ -445,10 +447,43 @@ func GetProcurementDetailWithStage(transactionNumber string) (*dto.ProcurementDe
 			CreatedAt:         transaction.CreatedAt,
 			UpdatedAt:         transaction.UpdatedAt,
 		},
-		Items:    items,
-		Stages:   mapTransactionStagesToResponse(stages),
-		GRStatus: grResponses,
+		Items:     items,
+		Stages:    mapTransactionStagesToResponse(stages),
+		GRStatus:  grResponses,
+		IONumbers: ioNumbers,
 	}, nil
+}
+
+// procurementIONumbers — nomor IO per cabang beserta nama cabangnya.
+func procurementIONumbers(transactionID uint) []dto.ProcurementIONumberResponse {
+	var rows []models.TransactionIONumber
+	config.DB.Where("transaction_id = ?", transactionID).Order("branch_code ASC").Find(&rows)
+
+	result := make([]dto.ProcurementIONumberResponse, 0, len(rows))
+	if len(rows) == 0 {
+		return result
+	}
+
+	codes := make([]string, 0, len(rows))
+	for _, r := range rows {
+		codes = append(codes, r.BranchCode)
+	}
+	var branches []models.Branch
+	config.DB.Select("branch_code", "branch_name").Where("branch_code IN ?", codes).Find(&branches)
+	names := make(map[string]string, len(branches))
+	for _, b := range branches {
+		names[b.BranchCode] = b.BranchName
+	}
+
+	for _, r := range rows {
+		result = append(result, dto.ProcurementIONumberResponse{
+			BranchCode:  r.BranchCode,
+			BranchName:  names[r.BranchCode],
+			IONumber:    r.IONumber,
+			ProcessedAt: r.ProcessedAt,
+		})
+	}
+	return result
 }
 
 // ============================================================

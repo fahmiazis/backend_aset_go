@@ -171,10 +171,21 @@ type ProcurementDetailWithStageResponse struct {
 	Stages      []TransactionStageResponse                `json:"stages"`
 	GRStatus    []AssetGRResponse                         `json:"gr_status,omitempty"`
 
+	// Nomor IO per cabang, dibentuk saat PROSES_BUDGET. transaction.io_number
+	// hanya menyimpan yang pertama.
+	IONumbers []ProcurementIONumberResponse `json:"io_numbers"`
+
 	// true kalau transaksi ini sedang menunggu tindakan user yang meminta detail.
 	// Dihitung dengan aturan yang sama dengan tab "Menunggu Saya" di daftar,
 	// supaya daftar dan detail tidak pernah berbeda pendapat.
 	WaitingForMe bool `json:"waiting_for_me"`
+}
+
+type ProcurementIONumberResponse struct {
+	BranchCode  string    `json:"branch_code"`
+	BranchName  string    `json:"branch_name"`
+	IONumber    string    `json:"io_number"`
+	ProcessedAt time.Time `json:"processed_at"`
 }
 
 type ProcurementTransactionResponse struct {
