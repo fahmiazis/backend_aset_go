@@ -21,7 +21,16 @@ var stockOpnameWaiting = waitingConfig{
 	},
 }
 
-// stockOpnameFindingSummary — ringkasan temuan per status fisik untuk email.
+// IsStockOpnameWaitingForUser dipakai halaman detail stock opname.
+func IsStockOpnameWaitingForUser(userID, transactionNumber string) bool {
+	transaction, err := getStockOpnameTransaction(transactionNumber)
+	if err != nil {
+		return false
+	}
+	return isWaitingForUser(userID, transaction, stockOpnameWaiting)
+}
+
+// stockOpnameFindingSummary —ringkasan temuan per status fisik untuk email.
 // Aset stock opname = seluruh aset cabang (bisa ratusan), jadi yang dikirim
 // rekapnya, bukan daftar aset. Sebelum submit item masih di tabel draft.
 func stockOpnameFindingSummary(transactionID uint) (title string, columns []string, rows [][]string) {

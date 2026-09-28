@@ -169,6 +169,10 @@ type StockOpnameFlowDetailResponse struct {
 	// RevisionMode: DRAFT hasil revisi — cuma item dengan needs_revision=true
 	// yang boleh diubah, sisanya dikunci. False = draft biasa, semua bisa diubah.
 	RevisionMode bool `json:"revision_mode"`
+
+	// WaitingForMe: giliran user yang sedang melihat? Diisi controller —
+	// di stage APPROVAL artinya role user ada di step yang sedang berjalan.
+	WaitingForMe bool `json:"waiting_for_me"`
 }
 
 // ============================================================

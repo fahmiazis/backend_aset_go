@@ -49,6 +49,9 @@ func GetStockOpnameFlowDetail(c *gin.Context) {
 		return
 	}
 
+	result.WaitingForMe = services.IsStockOpnameWaitingForUser(
+		c.GetString("user_id"), transactionNumber)
+
 	utils.SuccessResponse(c, http.StatusOK, "Stock opname detail retrieved successfully", result)
 }
 
