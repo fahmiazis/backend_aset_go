@@ -63,21 +63,6 @@ type StockOpnameGroupingStatus struct {
 	Total    int64                      `json:"total"`
 }
 
-// StockOpnamePhysicalVsSystem = chart "Status fisik vs SAP". Dihitung hanya
-// dari asset yang sudah punya temuan (finish/in_progress/rejected), karena
-// asset "belum_submit" memang belum punya data fisik untuk dibandingkan.
-//
-// Catatan: SystemTidakAda akan SELALU 0. Skema saat ini tidak punya jalur
-// untuk mencatat "aset ditemukan secara fisik tapi tidak terdaftar di
-// sistem" (endpoint add-asset selalu mensyaratkan asset_id yang sudah
-// terdaftar) — lihat juga kolom "FISIK ADA SAP TIDAK ADA" di detail report.
-type StockOpnamePhysicalVsSystem struct {
-	PhysicalAda      int64 `json:"physical_ada"`       // found_physical_status = EXISTS
-	PhysicalTidakAda int64 `json:"physical_tidak_ada"` // found_physical_status = MISSING
-	SystemAda        int64 `json:"system_ada"`         // selalu = physical_ada + physical_tidak_ada (lihat catatan)
-	SystemTidakAda   int64 `json:"system_tidak_ada"`   // selalu 0, lihat catatan
-}
-
 // StockOpnameConditionSummary = chart "Kondisi aset" (donut Baik/Rusak/Tidak Ada/Belum Isi)
 type StockOpnameConditionSummary struct {
 	Baik     int64 `json:"baik"`      // found_condition GOOD/FAIR
@@ -88,7 +73,6 @@ type StockOpnameConditionSummary struct {
 
 type StockOpnameDashboardCharts struct {
 	StatusPerGrouping []StockOpnameGroupingStatus `json:"status_per_grouping"`
-	PhysicalVsSystem  StockOpnamePhysicalVsSystem `json:"physical_vs_system"`
 	ConditionSummary  StockOpnameConditionSummary `json:"condition_summary"`
 	StatusSubmit      StockOpnameStatusBreakdown  `json:"status_submit"`
 }
@@ -101,17 +85,13 @@ type StockOpnameDashboardResponse struct {
 }
 
 // ============================================================
-// DETAIL REPORT (gambar 1 & 3 — tabel rekapitulasi + gambar 4 — cost center)
+// DETAIL REPORT (gambar 1 & 3 — tabel rekapitulasi)
 // ============================================================
 
 // StockOpnameRekapRow = satu baris di tabel rekapitulasi (kolom Acquis.val /
-// Accum.dep / Book val / Eksekusi seperti di contoh). Beberapa baris di
-// contoh referensi (mis. "SAP ADA FISIK TIDAK - KENDARAAN", tiga baris
-// "FISIK ADA SAP TIDAK ADA - ...") tidak punya jalur data di skema saat ini
-// (tidak ada flag kendaraan di kategori aset, tidak ada jalur input aset
-// fisik yang belum terdaftar di sistem) — baris-baris itu tetap dikirim
-// dengan value 0 dan Supported=false supaya FE bisa menampilkan badge
-// "belum didukung" alih-alih diam-diam menampilkan 0 yang menyesatkan.
+// Accum.dep / Book val / Eksekusi seperti di contoh). Supported=false
+// dipakai buat baris yang belum bisa dihitung dari skema saat ini — FE
+// nampilin badge "belum didukung" alih-alih angka 0 yang menyesatkan.
 type StockOpnameRekapRow struct {
 	Label                   string  `json:"label"`
 	AcquisitionValue        float64 `json:"acquisition_value"`
@@ -130,25 +110,12 @@ type StockOpnameAreaSummary struct {
 	TotalArea              int64   `json:"total_area"`
 }
 
-// StockOpnameCostCenterRow = satu baris chart "Nilai aset per cost center".
-// Tidak ada tabel cost center terpisah di skema saat ini — "cost center"
-// pada laporan ini adalah Branch (branch_code + branch_name), dipakai
-// sebagai proxy terdekat yang tersedia.
-type StockOpnameCostCenterRow struct {
-	BranchCode       string  `json:"branch_code"`
-	BranchName       string  `json:"branch_name"`
-	AcquisitionValue float64 `json:"acquisition_value"`
-	BookValue        float64 `json:"book_value"`
-	UnitCount        int64   `json:"unit_count"`
-}
-
 type StockOpnameDetailReportResponse struct {
-	Period      StockOpnameReportPeriod    `json:"period"`
-	BranchCode  string                     `json:"branch_code"`
-	Rekap       []StockOpnameRekapRow      `json:"rekap"`
-	AreaSummary StockOpnameAreaSummary     `json:"area_summary"`
-	CostCenters []StockOpnameCostCenterRow `json:"cost_centers_top10"`
-	Note        string                     `json:"note"`
+	Period      StockOpnameReportPeriod `json:"period"`
+	BranchCode  string                  `json:"branch_code"`
+	Rekap       []StockOpnameRekapRow   `json:"rekap"`
+	AreaSummary StockOpnameAreaSummary  `json:"area_summary"`
+	Note        string                  `json:"note"`
 }
 
 // ============================================================

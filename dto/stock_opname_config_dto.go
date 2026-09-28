@@ -19,6 +19,9 @@ type StockOpnameConfigResponse struct {
 	BorrowDocAllowPhoto bool `json:"borrow_doc_allow_photo"`
 	BorrowDocIsRequired bool `json:"borrow_doc_is_required"`
 
+	PhotoUploadMaxAgeDays int `json:"photo_upload_max_age_days"`
+	PhotoSubmitMaxAgeDays int `json:"photo_submit_max_age_days"`
+
 	UpdatedBy *string   `json:"updated_by"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -35,4 +38,7 @@ type UpdateStockOpnameConfigRequest struct {
 	BorrowDocAllowWord  bool `json:"borrow_doc_allow_word"`
 	BorrowDocAllowPhoto bool `json:"borrow_doc_allow_photo"`
 	BorrowDocIsRequired bool `json:"borrow_doc_is_required"`
+
+	PhotoUploadMaxAgeDays int `json:"photo_upload_max_age_days" binding:"required,min=1,max=365"`
+	PhotoSubmitMaxAgeDays int `json:"photo_submit_max_age_days" binding:"required,min=1,max=365"`
 }

@@ -16,6 +16,10 @@ type StockOpnameConfig struct {
 	BorrowDocAllowPhoto bool `json:"borrow_doc_allow_photo"`
 	BorrowDocIsRequired bool `json:"borrow_doc_is_required"`
 
+	// Foto bukti fisik per asset (dalam hari)
+	PhotoUploadMaxAgeDays int `json:"photo_upload_max_age_days"` // tanggal modified file vs saat upload
+	PhotoSubmitMaxAgeDays int `json:"photo_submit_max_age_days"` // tanggal upload foto vs saat submit
+
 	UpdatedBy *string   `gorm:"size:100" json:"updated_by"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

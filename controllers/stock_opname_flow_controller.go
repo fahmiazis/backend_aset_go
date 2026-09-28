@@ -385,7 +385,7 @@ func UploadStockOpnameAssetPhoto(c *gin.Context) {
 	defer file.Close()
 
 	// file_modified_at = File.lastModified (epoch ms) dari browser — opsional,
-	// dipakai buat validasi "gak lebih dari 10 hari" tanpa bergantung ke EXIF.
+	// dipakai buat validasi umur foto (photo_upload_max_age_days di config) tanpa bergantung ke EXIF.
 	clientModifiedAtMs, _ := strconv.ParseInt(c.PostForm("file_modified_at"), 10, 64)
 
 	result, err := services.UploadStockOpnameAssetPhoto(userID, transactionNumber, uint(assetID), file, header, clientModifiedAtMs)

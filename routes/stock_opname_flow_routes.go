@@ -135,11 +135,11 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 		stockOpnameReport := stockOpname.Group("/report")
 		{
 			// GET /transactions/stock-opname/report/dashboard?month=&year=&branch_code=
-			//   → stats card + data chart (status per grouping, fisik vs SAP, kondisi aset, status submit)
+			//   → stats card + data chart (status per grouping, kondisi aset, status submit)
 			stockOpnameReport.GET("/dashboard", controllers.GetStockOpnameReportDashboard)
 
 			// GET /transactions/stock-opname/report/detail?month=&year=&branch_code=
-			//   → tabel rekapitulasi (SAP=FISIK, SAP ADA FISIK TIDAK, dst) + top 10 cost center
+			//   → tabel rekapitulasi + area clear/tidak clear
 			stockOpnameReport.GET("/detail", controllers.GetStockOpnameReportDetail)
 
 			// GET /transactions/stock-opname/report/export?month=&year=&branch_code=

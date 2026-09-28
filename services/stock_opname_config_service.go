@@ -29,10 +29,12 @@ func getOrCreateStockOpnameConfig() (*models.StockOpnameConfig, error) {
 	// default (25 s/d 8, dokumen peminjaman PDF-only & wajib) biar app tetap
 	// jalan tanpa perlu migrasi ulang.
 	cfg = models.StockOpnameConfig{
-		SubmissionStartDay:  25,
-		SubmissionEndDay:    8,
-		BorrowDocAllowPDF:   true,
-		BorrowDocIsRequired: true,
+		SubmissionStartDay:    25,
+		SubmissionEndDay:      8,
+		BorrowDocAllowPDF:     true,
+		BorrowDocIsRequired:   true,
+		PhotoUploadMaxAgeDays: defaultStockOpnamePhotoMaxAgeDays,
+		PhotoSubmitMaxAgeDays: defaultStockOpnamePhotoMaxAgeDays,
 	}
 	if err := config.DB.Create(&cfg).Error; err != nil {
 		return nil, err
@@ -46,14 +48,16 @@ func GetStockOpnameConfig() (*dto.StockOpnameConfigResponse, error) {
 		return nil, err
 	}
 	return &dto.StockOpnameConfigResponse{
-		SubmissionStartDay:  cfg.SubmissionStartDay,
-		SubmissionEndDay:    cfg.SubmissionEndDay,
-		BorrowDocAllowPDF:   cfg.BorrowDocAllowPDF,
-		BorrowDocAllowWord:  cfg.BorrowDocAllowWord,
-		BorrowDocAllowPhoto: cfg.BorrowDocAllowPhoto,
-		BorrowDocIsRequired: cfg.BorrowDocIsRequired,
-		UpdatedBy:           cfg.UpdatedBy,
-		UpdatedAt:           cfg.UpdatedAt,
+		SubmissionStartDay:    cfg.SubmissionStartDay,
+		SubmissionEndDay:      cfg.SubmissionEndDay,
+		BorrowDocAllowPDF:     cfg.BorrowDocAllowPDF,
+		BorrowDocAllowWord:    cfg.BorrowDocAllowWord,
+		BorrowDocAllowPhoto:   cfg.BorrowDocAllowPhoto,
+		BorrowDocIsRequired:   cfg.BorrowDocIsRequired,
+		PhotoUploadMaxAgeDays: cfg.PhotoUploadMaxAgeDays,
+		PhotoSubmitMaxAgeDays: cfg.PhotoSubmitMaxAgeDays,
+		UpdatedBy:             cfg.UpdatedBy,
+		UpdatedAt:             cfg.UpdatedAt,
 	}, nil
 }
 
@@ -63,17 +67,30 @@ func UpdateStockOpnameConfig(userID string, req dto.UpdateStockOpnameConfigReque
 		return nil, err
 	}
 	if err := config.DB.Model(cfg).Updates(map[string]interface{}{
-		"submission_start_day":   req.SubmissionStartDay,
-		"submission_end_day":     req.SubmissionEndDay,
-		"borrow_doc_allow_pdf":   req.BorrowDocAllowPDF,
-		"borrow_doc_allow_word":  req.BorrowDocAllowWord,
-		"borrow_doc_allow_photo": req.BorrowDocAllowPhoto,
-		"borrow_doc_is_required": req.BorrowDocIsRequired,
-		"updated_by":             userID,
+		"submission_start_day":      req.SubmissionStartDay,
+		"submission_end_day":        req.SubmissionEndDay,
+		"borrow_doc_allow_pdf":      req.BorrowDocAllowPDF,
+		"borrow_doc_allow_word":     req.BorrowDocAllowWord,
+		"borrow_doc_allow_photo":    req.BorrowDocAllowPhoto,
+		"borrow_doc_is_required":    req.BorrowDocIsRequired,
+		"photo_upload_max_age_days": req.PhotoUploadMaxAgeDays,
+		"photo_submit_max_age_days": req.PhotoSubmitMaxAgeDays,
+		"updated_by":                userID,
 	}).Error; err != nil {
 		return nil, err
 	}
 	return GetStockOpnameConfig()
+}
+
+// defaultStockOpnamePhotoMaxAgeDays dipakai kalau config belum ada / kolom
+// umur foto kosong (<= 0), biar perilakunya sama kayak sebelum di-config-in.
+const defaultStockOpnamePhotoMaxAgeDays = 10
+
+func photoMaxAge(days int) (int, time.Duration) {
+	if days <= 0 {
+		days = defaultStockOpnamePhotoMaxAgeDays
+	}
+	return days, time.Duration(days) * 24 * time.Hour
 }
 
 // allowedBorrowDocExtensions ngembaliin daftar ekstensi file yang diterima

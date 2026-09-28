@@ -478,6 +478,7 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 	}
 
 	now := time.Now()
+	submitMaxAgeDays, submitMaxAge := photoMaxAge(soCfg.PhotoSubmitMaxAgeDays)
 
 	for _, item := range items {
 		if item.PhysicalStatus == "" || item.Condition == "" {
@@ -495,10 +496,10 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		// Asset yang dikunci selama revisi di-skip: fotonya udah lolos di
 		// submit sebelumnya dan creator gak bisa upload ulang.
 		lockedByRevision := revisionActive && !revisionScope[item.AssetID]
-		if !lockedByRevision && now.Sub(photo.CreatedAt) > stockOpnamePhotoMaxAge {
+		if !lockedByRevision && now.Sub(photo.CreatedAt) > submitMaxAge {
 			return nil, fmt.Errorf(
-				"foto bukti fisik untuk asset %s sudah diupload lebih dari 10 hari sebelum submit (upload: %s) — upload ulang foto yang lebih baru",
-				item.AssetNumber, photo.CreatedAt.Format("02 Jan 2006"),
+				"foto bukti fisik untuk asset %s sudah diupload lebih dari %d hari sebelum submit (upload: %s) — upload ulang foto yang lebih baru",
+				item.AssetNumber, submitMaxAgeDays, photo.CreatedAt.Format("02 Jan 2006"),
 			)
 		}
 		if physicalMap[item.PhysicalStatus].RequiresBorrowDocument && soCfg.BorrowDocIsRequired && !hasBorrowDoc[item.AssetID] {
@@ -1953,7 +1954,8 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 //
 // Wajib diisi sebelum submit (lihat SubmitStockOpname). Divalidasi 3
 // lapis: ukuran file, tanggal modifikasi file (dikirim dari browser via
-// File.lastModified, maks 10 hari dari sekarang), dan foto gak boleh
+// File.lastModified, maks N hari dari sekarang — N dari config
+// photo_upload_max_age_days), dan foto gak boleh
 // dipakai dobel buat asset lain di stock opname yang sama (dicek lewat
 // hash SHA-256 isi file). Satu asset cuma boleh punya 1 foto aktif —
 // upload ulang menimpa foto sebelumnya.
@@ -1967,7 +1969,6 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 
 const (
 	stockOpnamePhotoMaxSize    = 2 * 1024 * 1024 // 2MB — biar enteng buat testing/upload dari lapangan
-	stockOpnamePhotoMaxAge     = 10 * 24 * time.Hour
 	stockOpnamePhotoStorageDir = "uploads/stock_opname_photos"
 )
 
@@ -2026,9 +2027,15 @@ func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetI
 		return nil, fmt.Errorf("ukuran foto maksimal 2MB (file ini %.2f MB)", float64(len(data))/1024/1024)
 	}
 
+	soCfg, err := getOrCreateStockOpnameConfig()
+	if err != nil {
+		return nil, err
+	}
+	uploadMaxAgeDays, uploadMaxAge := photoMaxAge(soCfg.PhotoUploadMaxAgeDays)
+
 	capturedAt := resolvePhotoModifiedAt(clientModifiedAtMs)
-	if time.Since(capturedAt) > stockOpnamePhotoMaxAge {
-		return nil, fmt.Errorf("foto ini terakhir dimodifikasi tanggal %s, sudah lebih dari 10 hari dari sekarang — upload foto yang lebih baru", capturedAt.Format("02 Jan 2006"))
+	if time.Since(capturedAt) > uploadMaxAge {
+		return nil, fmt.Errorf("foto ini terakhir dimodifikasi tanggal %s, sudah lebih dari %d hari dari sekarang — upload foto yang lebih baru", capturedAt.Format("02 Jan 2006"), uploadMaxAgeDays)
 	}
 	if capturedAt.After(time.Now().Add(1 * time.Hour)) {
 		return nil, errors.New("tanggal modifikasi foto ada di masa depan — cek pengaturan tanggal/jam HP kamu")

@@ -331,7 +331,6 @@ func GetStockOpnameReportDashboard(filter dto.StockOpnameReportFilter) (*dto.Sto
 	groupingMap := map[string]*dto.StockOpnameGroupingStatus{}
 	var groupingOrder []string
 
-	var physical dto.StockOpnamePhysicalVsSystem
 	var condition dto.StockOpnameConditionSummary
 
 	for _, f := range facts {
@@ -357,11 +356,9 @@ func GetStockOpnameReportDashboard(filter dto.StockOpnameReportFilter) (*dto.Sto
 			continue
 		}
 		if f.FoundPhysicalStatusCountsAsMissing {
-			physical.PhysicalTidakAda++
 			condition.TidakAda++
 			continue
 		}
-		physical.PhysicalAda++
 		switch f.FoundConditionReportBucket {
 		case "BAIK":
 			condition.Baik++
@@ -369,8 +366,6 @@ func GetStockOpnameReportDashboard(filter dto.StockOpnameReportFilter) (*dto.Sto
 			condition.Rusak++
 		}
 	}
-	physical.SystemAda = physical.PhysicalAda + physical.PhysicalTidakAda
-	physical.SystemTidakAda = 0 // lihat catatan di dto.StockOpnamePhysicalVsSystem
 
 	sort.Strings(groupingOrder)
 	groupings := make([]dto.StockOpnameGroupingStatus, 0, len(groupingOrder))
@@ -412,7 +407,6 @@ func GetStockOpnameReportDashboard(filter dto.StockOpnameReportFilter) (*dto.Sto
 		},
 		Charts: dto.StockOpnameDashboardCharts{
 			StatusPerGrouping: groupings,
-			PhysicalVsSystem:  physical,
 			ConditionSummary:  condition,
 			StatusSubmit:      overall,
 		},
@@ -430,7 +424,6 @@ func GetStockOpnameReportDetail(filter dto.StockOpnameReportFilter) (*dto.StockO
 	}
 
 	rekap, areaSummary := buildRekapRows(facts, scopedBranches)
-	costCenters := buildCostCenterRows(facts, scopedBranches, 10)
 
 	resolvedBranch := strings.TrimSpace(filter.BranchCode)
 	if resolvedBranch == "" {
@@ -447,27 +440,23 @@ func GetStockOpnameReportDetail(filter dto.StockOpnameReportFilter) (*dto.StockO
 		BranchCode:  resolvedBranch,
 		Rekap:       rekap,
 		AreaSummary: areaSummary,
-		CostCenters: costCenters,
-		Note: "Baris bertanda supported=false belum bisa dihitung dari skema data saat ini " +
-			"(tidak ada jalur input aset fisik yang belum terdaftar di sistem, dan tidak ada flag kendaraan di kategori aset). " +
-			"Lihat doc-STOCK_OPNAME_FLOW_SUMMARY.md untuk detail gap-nya.",
 	}, nil
 }
 
 func buildRekapRows(facts []assetOpnameFact, scopedBranches []models.Branch) ([]dto.StockOpnameRekapRow, dto.StockOpnameAreaSummary) {
 	var sapFisikArea, sapFisikHO, sapAdaFisikTidak, assetMutasi dto.StockOpnameRekapRow
-	sapFisikArea.Label = "SAP = FISIK AREA"
+	sapFisikArea.Label = "SESUAI FISIK - AREA"
 	sapFisikArea.Supported = true
-	sapFisikHO.Label = "SAP = FISIK HO"
+	sapFisikHO.Label = "SESUAI FISIK - HO"
 	sapFisikHO.Supported = true
-	sapAdaFisikTidak.Label = "SAP ADA FISIK TIDAK"
+	sapAdaFisikTidak.Label = "FISIK TIDAK ADA"
 	sapAdaFisikTidak.Supported = true
 	assetMutasi.Label = "ASSET MUTASI"
 	assetMutasi.Supported = true
 
 	var idleCount, rusakCount, hilangCount int64
 	var assetBalance dto.StockOpnameRekapRow
-	assetBalance.Label = fmt.Sprintf("Asset Balance SAP per %s", time.Now().Format("2 January 2006"))
+	assetBalance.Label = fmt.Sprintf("Asset Balance per %s", time.Now().Format("2 January 2006"))
 	assetBalance.Supported = true
 
 	// per-branch activity, untuk baris "Total Area yang tidak kirim" +
@@ -619,7 +608,6 @@ func buildRekapRows(facts []assetOpnameFact, scopedBranches []models.Branch) ([]
 		sapFisikArea,
 		sapFisikHO,
 		sapAdaFisikTidak,
-		{Label: "SAP ADA FISIK TIDAK - KENDARAAN", Supported: false},
 		assetMutasi,
 		totalRekonsiliasi,
 		tidakKirim,
@@ -627,9 +615,6 @@ func buildRekapRows(facts []assetOpnameFact, scopedBranches []models.Branch) ([]
 		balanceChecked,
 		{Label: "IDLE", UnitCount: idleCount, Supported: true},
 		{Label: "RUSAK", UnitCount: rusakCount, Supported: true},
-		{Label: "FISIK ADA SAP TIDAK ADA - Asset Belum di GR", Supported: false},
-		{Label: "FISIK ADA SAP TIDAK ADA - Asset Belum Terdaftar", Supported: false},
-		{Label: "FISIK ADA SAP TIDAK ADA - Tidak ada nomor Asset", Supported: false},
 		{Label: "HILANG", UnitCount: hilangCount, Supported: true},
 	}
 
@@ -648,49 +633,6 @@ func buildRekapRows(facts []assetOpnameFact, scopedBranches []models.Branch) ([]
 	}
 }
 
-func buildCostCenterRows(facts []assetOpnameFact, scopedBranches []models.Branch, topN int) []dto.StockOpnameCostCenterRow {
-	type agg struct {
-		branchCode, branchName      string
-		acquisitionValue, bookValue float64
-		unitCount                   int64
-	}
-	byBranch := map[string]*agg{}
-	// Seed dulu dengan semua branch dalam scope supaya branch tanpa asset
-	// (nilai 0) tetap kebawa, bukan cuma branch yang punya asset di facts.
-	for _, b := range scopedBranches {
-		byBranch[b.BranchCode] = &agg{branchCode: b.BranchCode, branchName: b.BranchName}
-	}
-	for _, f := range facts {
-		if f.BranchCode == "" {
-			continue
-		}
-		a, ok := byBranch[f.BranchCode]
-		if !ok {
-			a = &agg{branchCode: f.BranchCode, branchName: f.BranchName}
-			byBranch[f.BranchCode] = a
-		}
-		a.acquisitionValue += f.AcquisitionValue
-		a.bookValue += f.BookValue
-		a.unitCount++
-	}
-
-	rows := make([]dto.StockOpnameCostCenterRow, 0, len(byBranch))
-	for _, a := range byBranch {
-		rows = append(rows, dto.StockOpnameCostCenterRow{
-			BranchCode:       a.branchCode,
-			BranchName:       a.branchName,
-			AcquisitionValue: math.Round(a.acquisitionValue*100) / 100,
-			BookValue:        math.Round(a.bookValue*100) / 100,
-			UnitCount:        a.unitCount,
-		})
-	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].AcquisitionValue > rows[j].AcquisitionValue })
-	if len(rows) > topN {
-		rows = rows[:topN]
-	}
-	return rows
-}
-
 // ============================================================
 // EXPORT EXCEL
 // ============================================================
@@ -702,7 +644,6 @@ func ExportStockOpnameReportExcel(filter dto.StockOpnameExportRequest) (*exceliz
 	}
 
 	rekap, areaSummary := buildRekapRows(facts, scopedBranches)
-	costCenters := buildCostCenterRows(facts, scopedBranches, 10)
 
 	f := excelize.NewFile()
 	defer func() {
@@ -713,20 +654,10 @@ func ExportStockOpnameReportExcel(filter dto.StockOpnameExportRequest) (*exceliz
 	monthName := start.Format("January")
 
 	writeSummarySheet(f, rekap, areaSummary, monthName, start.Year())
-	writeDetailListSheet(f, "SAP=FISIK", facts, func(x assetOpnameFact) bool {
-		return x.HasOpnameThisPeriod && x.OpnameStage == models.StageFinished && !x.FoundPhysicalStatusCountsAsMissing
-	})
-	writeDetailListSheet(f, "SAP ADA FISIK TDK", facts, func(x assetOpnameFact) bool {
-		return x.HasOpnameThisPeriod && x.FoundPhysicalStatusCountsAsMissing
-	})
 	writeDetailListSheet(f, "MUTASI", facts, func(x assetOpnameFact) bool {
 		return x.CurrentAssetStatus == models.AssetStatusInMutation
 	})
 	writeNotSubmittedBranchSheet(f, "TDK KIRIM", facts, scopedBranches)
-	writeUnsupportedSheet(f, "SAP TDK ADA FISIK ADA",
-		"Belum didukung skema saat ini: tidak ada jalur untuk mencatat aset yang ditemukan "+
-			"secara fisik tapi belum terdaftar di sistem (endpoint add-asset stock opname mensyaratkan asset_id yang sudah ada).")
-	writeCostCenterSheet(f, "COST CENTER", costCenters)
 	writeDetailListSheet(f, "DETAIL", facts, func(x assetOpnameFact) bool { return true })
 
 	f.DeleteSheet("Sheet1")
@@ -887,36 +818,5 @@ func writeNotSubmittedBranchSheet(f *excelize.File, sheet string, facts []assetO
 		row++
 	}
 	f.SetColWidth(sheet, "A", "D", 20)
-	f.SetActiveSheet(index)
-}
-
-func writeUnsupportedSheet(f *excelize.File, sheet string, note string) {
-	index, _ := f.NewSheet(sheet)
-	f.SetCellValue(sheet, "A1", note)
-	f.SetColWidth(sheet, "A", "A", 100)
-	f.SetActiveSheet(index)
-}
-
-func writeCostCenterSheet(f *excelize.File, sheet string, rows []dto.StockOpnameCostCenterRow) {
-	index, _ := f.NewSheet(sheet)
-	boldStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
-
-	headers := []string{"Branch Code", "Branch Name", "Acquisition Value", "Book Value", "Unit Count"}
-	for i, h := range headers {
-		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue(sheet, cell, h)
-		f.SetCellStyle(sheet, cell, cell, boldStyle)
-	}
-
-	row := 2
-	for _, r := range rows {
-		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), r.BranchCode)
-		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), r.BranchName)
-		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), r.AcquisitionValue)
-		f.SetCellValue(sheet, fmt.Sprintf("D%d", row), r.BookValue)
-		f.SetCellValue(sheet, fmt.Sprintf("E%d", row), r.UnitCount)
-		row++
-	}
-	f.SetColWidth(sheet, "A", "E", 22)
 	f.SetActiveSheet(index)
 }

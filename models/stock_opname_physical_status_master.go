@@ -25,8 +25,8 @@ type StockOpnamePhysicalStatusMaster struct {
 	// berlaku utk "BORROWED".
 	RequiresBorrowDocument bool `gorm:"not null;default:false" json:"requires_borrow_document"`
 
-	// CountsAsMissing: dipakai laporan buat bucket "Hilang"/"SAP ADA FISIK
-	// TIDAK" (dulu hanya "MISSING"). BORROWED sengaja TIDAK masuk sini karena
+	// CountsAsMissing: dipakai laporan buat bucket "Hilang"/"FISIK TIDAK ADA"
+	// (dulu hanya "MISSING"). BORROWED sengaja TIDAK masuk sini karena
 	// aset dianggap masih "ada" (cuma lagi dipinjam).
 	CountsAsMissing bool `gorm:"not null;default:false" json:"counts_as_missing"`
 
