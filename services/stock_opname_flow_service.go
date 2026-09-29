@@ -1314,16 +1314,28 @@ func buildStockOpnameItemResponse(item stockOpnameItemRow, photo models.StockOpn
 // ============================================================
 
 type StockOpnameListFilter struct {
-	Status       *string `form:"status"`
+	Status *string `form:"status"`
+	// Boleh beberapa stage sekaligus, dipisah koma — sama dengan list procurement.
 	CurrentStage *string `form:"current_stage"`
 	CreatedBy    *string `form:"created_by"`
 	StartDate    *string `form:"start_date"`
 	EndDate      *string `form:"end_date"`
-	Page         int     `form:"page"`
-	Limit        int     `form:"limit"`
+	// Cari berdasarkan nomor transaksi atau nama pembuat.
+	Search *string `form:"search"`
+	Page   int     `form:"page" binding:"omitempty,min=1"`
+	// Dibatasi max 100 supaya client gak bisa minta seluruh tabel sekaligus.
+	Limit int `form:"limit" binding:"omitempty,min=1,max=100"`
+
+	// Hanya stock opname yang menunggu tindakan user yang sedang login.
+	WaitingForMe bool `form:"waiting_for_me"`
+	// Diisi controller dari token, bukan dari query.
+	ViewerUserID string `form:"-"`
 }
 
-func GetAllStockOpnameDrafts(filter StockOpnameListFilter, viewer AssetViewer) ([]dto.StockOpnameFlowDetailResponse, int64, error) {
+// GetAllStockOpnameDrafts — list ringan: header transaksi + jumlah aset saja.
+// Detail item (bisa ratusan aset per cabang, lengkap dengan foto & dokumen)
+// cuma dimuat di endpoint /detail, bukan di tiap baris list.
+func GetAllStockOpnameDrafts(filter StockOpnameListFilter, viewer AssetViewer) ([]dto.StockOpnameFlowListResponse, int64, error) {
 	query := config.DB.Model(&models.Transaction{}).
 		Where("transaction_type = ?", TxStockOpnameFlow)
 
@@ -1331,20 +1343,45 @@ func GetAllStockOpnameDrafts(filter StockOpnameListFilter, viewer AssetViewer) (
 	// yang tertanam di segmen kedua nomor transaksi. Admin melihat semua.
 	query = applyOriginBranchScope(query, listBranchScope(viewer))
 
-	if filter.Status != nil {
+	if filter.Status != nil && *filter.Status != "" {
 		query = query.Where("status = ?", *filter.Status)
 	}
-	if filter.CurrentStage != nil {
-		query = query.Where("current_stage = ?", *filter.CurrentStage)
+	if filter.CurrentStage != nil && *filter.CurrentStage != "" {
+		stages := make([]string, 0)
+		for _, stage := range strings.Split(*filter.CurrentStage, ",") {
+			if trimmed := strings.TrimSpace(stage); trimmed != "" {
+				stages = append(stages, trimmed)
+			}
+		}
+
+		if len(stages) == 1 {
+			query = query.Where("current_stage = ?", stages[0])
+		} else if len(stages) > 1 {
+			query = query.Where("current_stage IN ?", stages)
+		}
 	}
-	if filter.CreatedBy != nil {
+	if filter.CreatedBy != nil && *filter.CreatedBy != "" {
 		query = query.Where("created_by = ?", *filter.CreatedBy)
 	}
-	if filter.StartDate != nil {
+	if filter.WaitingForMe && filter.ViewerUserID != "" {
+		query = applyStockOpnameWaitingFilter(query, filter.ViewerUserID)
+	}
+	if filter.StartDate != nil && *filter.StartDate != "" {
 		query = query.Where("transaction_date >= ?", *filter.StartDate)
 	}
-	if filter.EndDate != nil {
+	if filter.EndDate != nil && *filter.EndDate != "" {
 		query = query.Where("transaction_date <= ?", *filter.EndDate)
+	}
+	if filter.Search != nil {
+		if keyword := strings.TrimSpace(*filter.Search); keyword != "" {
+			// LIKE, bukan ILIKE — DB-nya MariaDB, collation default sudah case-insensitive.
+			like := "%" + keyword + "%"
+			query = query.Where(
+				"transaction_number LIKE ? OR created_by IN (?)",
+				like,
+				config.DB.Model(&models.User{}).Select("id").Where("fullname LIKE ? OR username LIKE ?", like, like),
+			)
+		}
 	}
 
 	var total int64
@@ -1369,16 +1406,35 @@ func GetAllStockOpnameDrafts(filter StockOpnameListFilter, viewer AssetViewer) (
 		return nil, 0, err
 	}
 
-	responses := make([]dto.StockOpnameFlowDetailResponse, len(transactions))
-	for i, t := range transactions {
-		detail, err := GetStockOpnameFlowDetail(t.TransactionNumber)
-		if err != nil {
-			return nil, 0, err
+	responses := make([]dto.StockOpnameFlowListResponse, len(transactions))
+	for i := range transactions {
+		t := &transactions[i]
+		responses[i] = dto.StockOpnameFlowListResponse{
+			Transaction:  mapTransactionHeaderToResponse(*t),
+			ItemCount:    countStockOpnameItems(t),
+			IsSubmissive: t.IsSubmissive,
 		}
-		responses[i] = *detail
 	}
 
 	return responses, total, nil
+}
+
+// countStockOpnameItems — jumlah aset tanpa memuat barisnya; tabelnya sama
+// dengan getStockOpnameItemRows (tergantung stage).
+func countStockOpnameItems(transaction *models.Transaction) int64 {
+	var model interface{}
+	switch transaction.CurrentStage {
+	case models.StageDraft:
+		model = &models.StockOpnameDraftItem{}
+	case models.StageFinished:
+		model = &models.StockOpnameItemHistory{}
+	default:
+		model = &models.TransactionStockOpname{}
+	}
+
+	var count int64
+	config.DB.Model(model).Where("transaction_id = ?", transaction.ID).Count(&count)
+	return count
 }
 
 // ============================================================
@@ -1590,13 +1646,13 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 
 const stockOpnameDocumentationSheet = "Dokumentasi"
 
-func GenerateStockOpnameDocumentationExcel(userID, transactionNumber string) (*excelize.File, string, error) {
+// Akses mengikuti hak lihat list/detail (dicek di controller lewat
+// denyIfCannotViewTransaction), bukan cuma pembuatnya — dokumentasi ini
+// memang buat dibagikan ke pihak yang ikut memeriksa.
+func GenerateStockOpnameDocumentationExcel(transactionNumber string) (*excelize.File, string, error) {
 	transaction, err := getStockOpnameTransaction(transactionNumber)
 	if err != nil {
 		return nil, "", err
-	}
-	if transaction.CreatedBy != userID {
-		return nil, "", errors.New("you can only download the documentation for your own stock opname")
 	}
 	if transaction.CurrentStage == models.StageDraft {
 		return nil, "", errors.New("dokumentasi baru bisa diunduh setelah stock opname disubmit (foto bukti fisik belum tervalidasi lengkap)")

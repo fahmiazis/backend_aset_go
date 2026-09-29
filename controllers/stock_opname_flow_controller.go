@@ -56,29 +56,14 @@ func GetStockOpnameFlowDetail(c *gin.Context) {
 }
 
 func GetAllStockOpnamesFlow(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-
-	filter := services.StockOpnameListFilter{
-		Page:  page,
-		Limit: limit,
+	var filter services.StockOpnameListFilter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
 	}
 
-	if status := c.Query("status"); status != "" {
-		filter.Status = &status
-	}
-	if stage := c.Query("current_stage"); stage != "" {
-		filter.CurrentStage = &stage
-	}
-	if createdBy := c.Query("created_by"); createdBy != "" {
-		filter.CreatedBy = &createdBy
-	}
-	if startDate := c.Query("start_date"); startDate != "" {
-		filter.StartDate = &startDate
-	}
-	if endDate := c.Query("end_date"); endDate != "" {
-		filter.EndDate = &endDate
-	}
+	// Diambil dari token, bukan query — sama dengan list procurement.
+	filter.ViewerUserID = c.GetString("user_id")
 
 	results, total, err := services.GetAllStockOpnameDrafts(filter, assetViewer(c))
 	if err != nil {
@@ -173,14 +158,19 @@ func DownloadStockOpnameTemplate(c *gin.Context) {
 // opname disubmit (bukan DRAFT lagi), karena baru saat itu foto per aset
 // dijamin lengkap & tervalidasi.
 func DownloadStockOpnameDocumentation(c *gin.Context) {
-	userID := c.GetString("user_id")
 	transactionNumber := c.Query("transaction_number")
 	if transactionNumber == "" {
 		utils.ErrorResponse(c, http.StatusBadRequest, "transaction_number is required")
 		return
 	}
 
-	file, filename, err := services.GenerateStockOpnameDocumentationExcel(userID, transactionNumber)
+	// Siapa pun yang boleh melihat list/detail transaksi ini boleh mengunduh
+	// dokumentasinya — scope-nya sama persis dengan GetStockOpnameFlowDetail.
+	if denyIfCannotViewTransaction(c, transactionNumber, services.TxStockOpnameFlow) {
+		return
+	}
+
+	file, filename, err := services.GenerateStockOpnameDocumentationExcel(transactionNumber)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
