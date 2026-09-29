@@ -2027,10 +2027,21 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 // longgar karena hampir semua file punya metadata ini.
 // ============================================================
 
-const (
-	stockOpnamePhotoMaxSize    = 2 * 1024 * 1024 // 2MB — biar enteng buat testing/upload dari lapangan
-	stockOpnamePhotoStorageDir = "uploads/stock_opname_photos"
-)
+const stockOpnamePhotoMaxSize = 2 * 1024 * 1024 // 2MB — biar enteng buat testing/upload dari lapangan
+
+// stockOpnameStorageDir nentuin folder file stock opname per transaksi.
+// Root-nya sama kayak attachment procurement (AttachmentStorageRoot, di
+// container = volume /app/documents) biar file gak ikut kehapus pas
+// container di-recreate waktu deploy.
+// Struktur: {root}/STOCK_OPNAME/{transaction_number}/{kind}/
+func stockOpnameStorageDir(transactionNumber, kind string) string {
+	return filepath.Join(
+		AttachmentStorageRoot(),
+		models.TransactionTypeStockOpname,
+		sanitizePathSegment(transactionNumber),
+		kind,
+	)
+}
 
 // resolvePhotoModifiedAt nentuin tanggal "modified" foto dari nilai
 // File.lastModified (epoch milliseconds) yang dikirim frontend. Kalau
@@ -2112,7 +2123,7 @@ func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetI
 		return nil, errors.New("foto ini sudah dipakai buat asset lain di stock opname ini — tiap asset wajib pakai foto yang berbeda")
 	}
 
-	dir := filepath.Join(stockOpnamePhotoStorageDir, sanitizePathSegment(transactionNumber))
+	dir := stockOpnameStorageDir(transactionNumber, "photos")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to prepare storage directory: %w", err)
 	}
@@ -2193,10 +2204,7 @@ func GetStockOpnameAssetPhotoFilePath(photoID uint) (string, string, error) {
 // batas tetap 5MB, format PDF-only.
 // ============================================================
 
-const (
-	stockOpnameBorrowDocMaxSize    = 5 * 1024 * 1024 // 5MB
-	stockOpnameBorrowDocStorageDir = "uploads/stock_opname_borrow_documents"
-)
+const stockOpnameBorrowDocMaxSize = 5 * 1024 * 1024 // 5MB
 
 func UploadStockOpnameBorrowDocument(userID string, transactionNumber string, assetID uint, file multipart.File, header *multipart.FileHeader) (*dto.StockOpnameFlowDetailResponse, error) {
 	transaction, err := getStockOpnameTransaction(transactionNumber)
@@ -2258,7 +2266,7 @@ func UploadStockOpnameBorrowDocument(userID string, transactionNumber string, as
 		return nil, fmt.Errorf("ukuran dokumen maksimal 5MB (file ini %.2f MB)", float64(len(data))/1024/1024)
 	}
 
-	dir := filepath.Join(stockOpnameBorrowDocStorageDir, sanitizePathSegment(transactionNumber))
+	dir := stockOpnameStorageDir(transactionNumber, "borrow_documents")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to prepare storage directory: %w", err)
 	}
