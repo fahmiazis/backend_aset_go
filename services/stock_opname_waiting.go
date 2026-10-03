@@ -4,6 +4,8 @@ import (
 	"backend-go/config"
 	"backend-go/models"
 	"fmt"
+
+	"gorm.io/gorm"
 )
 
 // Pemetaan stage stock opname ke pengerjanya (dipakai email notifikasi):
@@ -19,6 +21,10 @@ var stockOpnameWaiting = waitingConfig{
 			permissions: []string{"execute_stock_opname"},
 		},
 	},
+}
+
+func applyStockOpnameWaitingFilter(query *gorm.DB, userID string) *gorm.DB {
+	return applyWaitingFilter(query, userID, stockOpnameWaiting)
 }
 
 // IsStockOpnameWaitingForUser dipakai halaman detail stock opname.

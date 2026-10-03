@@ -175,6 +175,14 @@ type StockOpnameFlowDetailResponse struct {
 	WaitingForMe bool `json:"waiting_for_me"`
 }
 
+// StockOpnameFlowListResponse — satu baris di list stock opname. Sengaja
+// tanpa items/stages: detailnya diambil lewat /detail.
+type StockOpnameFlowListResponse struct {
+	Transaction  TransactionHeaderResponse `json:"transaction"`
+	ItemCount    int64                     `json:"item_count"`
+	IsSubmissive *bool                     `json:"is_submissive"`
+}
+
 // ============================================================
 // UPLOAD TEMPLATE EXCEL (bulk update temuan)
 // ============================================================
