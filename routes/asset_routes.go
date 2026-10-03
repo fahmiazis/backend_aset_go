@@ -24,6 +24,10 @@ func SetupAssetMasterRoutes(rg *gin.RouterGroup) {
 		// unduh aset (format template mass update), dibatasi cabang user —
 		// datanya sama dengan yang sudah terlihat di GET /assets
 		assets.GET("/export", controllers.ExportAssets)
+		// QR label aset: isi = nomor aset terenkripsi (QR_SECRET_KEY), cukup
+		// login + dibatasi cabang user. resolve dipakai aplikasi setelah scan.
+		assets.POST("/qr-codes", controllers.GetAssetQRCodes)
+		assets.POST("/qr/resolve", controllers.ResolveAssetQR)
 		assets.GET("/:number", controllers.GetAssetByNumber)
 		assets.GET("/:number/value-history", controllers.GetAssetValueHistory)
 	}

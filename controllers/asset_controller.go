@@ -4,6 +4,7 @@ import (
 	"backend-go/dto"
 	"backend-go/services"
 	"backend-go/utils"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -83,4 +84,54 @@ func GetAssetValueHistory(c *gin.Context) {
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "Asset value history retrieved successfully", history)
+}
+
+// POST /assets/qr-codes — isi QR (nomor aset terenkripsi) untuk label aset.
+// Dibatasi cabang user seperti GET /assets.
+func GetAssetQRCodes(c *gin.Context) {
+	var req dto.AssetQRCodesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	codes, err := services.GetAssetQRCodes(req.AssetNumbers, assetViewer(c))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, services.ErrQRKeyMissing) {
+			status = http.StatusServiceUnavailable
+		}
+		utils.ErrorResponse(c, status, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Asset QR codes generated successfully", codes)
+}
+
+// POST /assets/qr/resolve — hasil scan label → detail aset. Hanya aplikasi
+// (lewat backend) yang bisa membuka isi QR; aset cabang lain dibalas 404.
+func ResolveAssetQR(c *gin.Context) {
+	var req dto.AssetQRResolveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationErrorResponse(c, err)
+		return
+	}
+
+	assetNumber, err := services.DecryptAssetQR(req.Payload)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, services.ErrQRKeyMissing) {
+			status = http.StatusServiceUnavailable
+		}
+		utils.ErrorResponse(c, status, err.Error())
+		return
+	}
+
+	asset, err := services.GetAssetByNumber(assetNumber)
+	if err != nil || !services.CanViewAsset(assetViewer(c), asset) {
+		utils.ErrorResponse(c, http.StatusNotFound, "asset not found")
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Asset retrieved successfully", asset)
 }

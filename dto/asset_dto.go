@@ -58,3 +58,19 @@ type AssetListFilter struct {
 	Page           int     `form:"page" binding:"min=1"`
 	Limit          int     `form:"limit" binding:"min=1,max=100"`
 }
+
+// POST /assets/qr-codes — isi QR label aset (tab QR Code di /dashboard/asset)
+type AssetQRCodesRequest struct {
+	AssetNumbers []string `json:"asset_numbers" binding:"required,min=1,max=100"`
+}
+
+type AssetQRCodeResponse struct {
+	AssetNumber string `json:"asset_number"`
+	// nomor aset terenkripsi — hanya bisa dibuka lewat POST /assets/qr/resolve
+	QRPayload string `json:"qr_payload"`
+}
+
+// POST /assets/qr/resolve — dipakai aplikasi setelah scan label
+type AssetQRResolveRequest struct {
+	Payload string `json:"payload" binding:"required"`
+}
