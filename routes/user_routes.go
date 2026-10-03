@@ -17,6 +17,12 @@ func SetupUserRoutes(rg *gin.RouterGroup) {
 		{
 			adminRoutes.GET("", controllers.GetAllUsers)
 			adminRoutes.POST("", controllers.CreateUser)
+
+			// Upload Excel: mode=new | update (mass update)
+			adminRoutes.GET("/import/template", controllers.UserImportTemplate)
+			adminRoutes.POST("/import", controllers.ImportUsers)
+			// unduh seluruh user dalam format template mass update
+			adminRoutes.GET("/export", controllers.ExportUsers)
 			adminRoutes.PUT("/:id", controllers.UpdateUser)
 			adminRoutes.DELETE("/:id", controllers.DeleteUser)
 			adminRoutes.POST("/:id/roles", controllers.AssignRoles)

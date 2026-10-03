@@ -111,48 +111,48 @@ func AssignHomebaseUsers(branchID string, userIDs []string) error {
 	}()
 
 	for _, userID := range unique {
-		// Nonaktifkan homebase lain milik user ini (tidak dihapus)
-		if err := tx.Model(&models.UserBranch{}).
-			Where("user_id = ? AND branch_type = ? AND branch_id <> ?",
-				userID, branchTypeHomebase, branchID).
-			Update("is_active", false).Error; err != nil {
-			tx.Rollback()
-			return err
-		}
-
-		// Buat atau aktifkan baris untuk cabang ini
-		var existing models.UserBranch
-		err := tx.Where("user_id = ? AND branch_id = ?", userID, branchID).
-			First(&existing).Error
-
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			if err := tx.Create(&models.UserBranch{
-				UserID:     userID,
-				BranchID:   branchID,
-				BranchType: branchTypeHomebase,
-				IsActive:   true,
-			}).Error; err != nil {
-				tx.Rollback()
-				return err
-			}
-		case err == nil:
-			// Baris sudah ada (mungkin bertipe temporary/assignment) —
-			// naikkan jadi homebase aktif
-			if err := tx.Model(&existing).Updates(map[string]interface{}{
-				"branch_type": branchTypeHomebase,
-				"is_active":   true,
-			}).Error; err != nil {
-				tx.Rollback()
-				return err
-			}
-		default:
+		if err := setActiveHomebaseTx(tx, userID, branchID); err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
 
 	return tx.Commit().Error
+}
+
+// setActiveHomebaseTx menjadikan branchID homebase aktif user: homebase lain
+// dinonaktifkan (tetap tersimpan), baris cabang ini dibuat atau dinaikkan jadi
+// homebase aktif. Dipakai AssignHomebaseUsers dan upload user.
+func setActiveHomebaseTx(tx *gorm.DB, userID, branchID string) error {
+	if err := tx.Model(&models.UserBranch{}).
+		Where("user_id = ? AND branch_type = ? AND branch_id <> ?",
+			userID, branchTypeHomebase, branchID).
+		Update("is_active", false).Error; err != nil {
+		return err
+	}
+
+	var existing models.UserBranch
+	err := tx.Where("user_id = ? AND branch_id = ?", userID, branchID).
+		First(&existing).Error
+
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return tx.Create(&models.UserBranch{
+			UserID:     userID,
+			BranchID:   branchID,
+			BranchType: branchTypeHomebase,
+			IsActive:   true,
+		}).Error
+	case err == nil:
+		// Baris sudah ada (mungkin bertipe temporary/assignment) —
+		// naikkan jadi homebase aktif
+		return tx.Model(&existing).Updates(map[string]interface{}{
+			"branch_type": branchTypeHomebase,
+			"is_active":   true,
+		}).Error
+	default:
+		return err
+	}
 }
 
 // RemoveHomebaseUser melepas satu user dari homebase cabang ini.

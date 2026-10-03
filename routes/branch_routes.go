@@ -28,6 +28,13 @@ func SetupBranchRoutes(rg *gin.RouterGroup) {
 		adminRoutes.Use(middleware.RequireRole("admin"))
 		{
 			adminRoutes.POST("", controllers.CreateBranch)
+
+			// Upload Excel: mode=new (kode otomatis) | update (mass update) |
+			// member (set homebase & akses cabang user)
+			adminRoutes.GET("/import/template", controllers.BranchImportTemplate)
+			adminRoutes.POST("/import", controllers.ImportBranches)
+			// unduh seluruh cabang dalam format template mass update
+			adminRoutes.GET("/export", controllers.ExportBranches)
 			adminRoutes.PUT("/:id", controllers.UpdateBranch)
 			adminRoutes.DELETE("/:id", controllers.DeleteBranch)
 
