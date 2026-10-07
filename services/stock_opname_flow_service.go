@@ -24,6 +24,7 @@ import (
 	"github.com/xuri/excelize/v2"
 	_ "golang.org/x/image/webp" // registrasi decoder image/webp — dipakai resolveStockOpnamePicturePath
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // TxStockOpnameFlow adalah transaction_type yang sama dipakai oleh CRUD lama
@@ -55,7 +56,8 @@ func getStockOpnameTransaction(transactionNumber string) (*models.Transaction, e
 // CreateStockOpnameDraft bikin draft baru dan langsung mengisi semua asset
 // yang ada di branch homebase aktif si pembuat (1 user = 1 homebase aktif).
 // Tidak ada lagi add/remove asset manual — daftar asset adalah snapshot
-// kondisi branch pada saat draft dibuat.
+// kondisi branch pada saat draft dibuat. Satu cabang cuma boleh punya satu
+// stock opname berjalan (lihat stock_opname_active.go).
 func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest) (*dto.StockOpnameFlowDetailResponse, error) {
 	now := time.Now()
 	transactionDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -76,10 +78,15 @@ func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest
 		return nil, fmt.Errorf("branch %s belum memiliki asset terdaftar, tidak bisa membuat stock opname", branchCode)
 	}
 
-	// Gak ada lagi pengecualian "asset lagi kepake stock opname lain yang
-	// masih berjalan" — user yang sama boleh bikin stock opname baru kapan
-	// aja, termasuk hari yang sama & overlap asset dengan stock opname lain
-	// yang belum selesai. Tiap stock opname independen satu sama lain.
+	// Cek awal sebelum nomor transaksi dipakai; dicek ulang di dalam
+	// transaksi DB dengan lock cabang supaya dua request bersamaan tidak
+	// sama-sama lolos.
+	if active, err := findActiveStockOpname(config.DB, branchCode); err != nil {
+		return nil, err
+	} else if active != nil {
+		return nil, &ErrStockOpnameActiveExists{BranchCode: branchCode, TransactionNumber: active.TransactionNumber, Stage: active.CurrentStage}
+	}
+
 	transactionNumber, err := GenerateTransactionNumber(userID, TxStockOpnameFlow)
 	if err != nil {
 		return nil, err
@@ -91,6 +98,20 @@ func CreateStockOpnameDraft(userID string, req dto.CreateStockOpnameDraftRequest
 			tx.Rollback()
 		}
 	}()
+
+	var branch models.Branch
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("branch_code = ?", branchCode).First(&branch).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if active, err := findActiveStockOpname(tx, branchCode); err != nil {
+		tx.Rollback()
+		return nil, err
+	} else if active != nil {
+		tx.Rollback()
+		return nil, &ErrStockOpnameActiveExists{BranchCode: branchCode, TransactionNumber: active.TransactionNumber, Stage: active.CurrentStage}
+	}
 
 	transaction := models.Transaction{
 		TransactionNumber: transactionNumber,
@@ -168,8 +189,8 @@ func UpdateStockOpnameFinding(userID string, transactionNumber string, req dto.U
 		return nil, errors.New("can only update findings on DRAFT stock opnames")
 	}
 
-	if transaction.CreatedBy != userID {
-		return nil, errors.New("you can only modify your own stock opname draft")
+	if err := ensureStockOpnameBranchMember(userID, transaction); err != nil {
+		return nil, err
 	}
 
 	physicalMap, err := loadStockOpnamePhysicalStatusMap()
@@ -250,8 +271,8 @@ func BulkUpdateStockOpnameFinding(userID string, transactionNumber string, req d
 		return nil, errors.New("can only update findings on DRAFT stock opnames")
 	}
 
-	if transaction.CreatedBy != userID {
-		return nil, errors.New("you can only modify your own stock opname draft")
+	if err := ensureStockOpnameBranchMember(userID, transaction); err != nil {
+		return nil, err
 	}
 
 	var existing []models.StockOpnameDraftItem
@@ -428,8 +449,8 @@ func SubmitStockOpname(userID string, transactionNumber string, req dto.SubmitSt
 		return nil, err
 	}
 
-	if transaction.CreatedBy != userID {
-		return nil, errors.New("you can only submit your own stock opname")
+	if err := ensureStockOpnameBranchMember(userID, transaction); err != nil {
+		return nil, err
 	}
 
 	if transaction.CurrentStage != models.StageDraft {
@@ -1537,8 +1558,8 @@ func GenerateStockOpnameTemplateExcel(userID, transactionNumber string) (*exceli
 	if err != nil {
 		return nil, "", err
 	}
-	if transaction.CreatedBy != userID {
-		return nil, "", errors.New("you can only download the template for your own stock opname draft")
+	if err := ensureStockOpnameBranchMember(userID, transaction); err != nil {
+		return nil, "", err
 	}
 
 	var items []models.StockOpnameDraftItem
@@ -1836,8 +1857,8 @@ func ProcessStockOpnameTemplateUpload(userID, transactionNumber string, file io.
 	if transaction.CurrentStage != models.StageDraft {
 		return nil, errors.New("can only upload findings for DRAFT stock opnames")
 	}
-	if transaction.CreatedBy != userID {
-		return nil, errors.New("you can only modify your own stock opname draft")
+	if err := ensureStockOpnameBranchMember(userID, transaction); err != nil {
+		return nil, err
 	}
 
 	xf, err := excelize.OpenReader(file)
@@ -2063,8 +2084,8 @@ func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetI
 	if transaction.CurrentStage != models.StageDraft {
 		return nil, errors.New("can only upload photos on DRAFT stock opnames")
 	}
-	if transaction.CreatedBy != userID {
-		return nil, errors.New("you can only modify your own stock opname draft")
+	if err := ensureStockOpnameBranchMember(userID, transaction); err != nil {
+		return nil, err
 	}
 
 	if header.Size > stockOpnamePhotoMaxSize {
@@ -2215,8 +2236,8 @@ func UploadStockOpnameBorrowDocument(userID string, transactionNumber string, as
 	if transaction.CurrentStage != models.StageDraft {
 		return nil, errors.New("can only upload borrow documents on DRAFT stock opnames")
 	}
-	if transaction.CreatedBy != userID {
-		return nil, errors.New("you can only modify your own stock opname draft")
+	if err := ensureStockOpnameBranchMember(userID, transaction); err != nil {
+		return nil, err
 	}
 
 	if header.Size > stockOpnameBorrowDocMaxSize {

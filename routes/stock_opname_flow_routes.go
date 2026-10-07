@@ -20,6 +20,10 @@ func SetupStockOpnameFlowRoutes(rg *gin.RouterGroup) {
 
 		stockOpname.GET("", controllers.GetAllStockOpnamesFlow)
 
+		// GET /transactions/stock-opname/active → stock opname berjalan di cabang
+		// homebase aktif user (1 cabang = maks 1, data null kalau belum ada)
+		stockOpname.GET("/active", controllers.GetMyActiveStockOpname)
+
 		stockOpname.GET("/detail", controllers.GetStockOpnameFlowDetail)
 
 		// GET /transactions/stock-opname/photo/:id/file → serve foto (inline), gak dibatasi stage
