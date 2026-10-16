@@ -4,6 +4,7 @@ import (
 	"backend-go/dto"
 	"backend-go/services"
 	"backend-go/utils"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -25,11 +26,29 @@ func CreateStockOpnameDraft(c *gin.Context) {
 
 	result, err := services.CreateStockOpnameDraft(userID, req)
 	if err != nil {
+		var active *services.ErrStockOpnameActiveExists
+		if errors.As(err, &active) {
+			utils.ErrorResponse(c, http.StatusConflict, err.Error())
+			return
+		}
 		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	utils.SuccessResponse(c, http.StatusCreated, "Stock opname draft created successfully", result)
+}
+
+// GET /transactions/stock-opname/active — stock opname yang sedang berjalan di
+// cabang homebase aktif user; data null kalau belum ada. Dipakai alur scan QR
+// mobile untuk langsung membuka temuan aset di stock opname cabangnya.
+func GetMyActiveStockOpname(c *gin.Context) {
+	result, err := services.GetMyActiveStockOpname(c.GetString("user_id"))
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(c, http.StatusOK, "Active stock opname retrieved successfully", result)
 }
 
 func GetStockOpnameFlowDetail(c *gin.Context) {

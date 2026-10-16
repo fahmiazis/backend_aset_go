@@ -9,7 +9,8 @@ import (
 )
 
 // Pemetaan stage stock opname ke pengerjanya (dipakai email notifikasi):
-//   - DRAFT → pembuatnya
+//   - DRAFT → pembuatnya + semua user dengan homebase aktif di cabang
+//     stock opname itu (draft milik cabang, lihat stock_opname_active.go)
 //   - APPROVAL tidak terdaftar → ditentukan giliran step STOCK_OPNAME_APPROVAL
 //   - EXECUTE_STOCK_OPNAME → execute_stock_opname di menu Stock Opname Execute
 var stockOpnameWaiting = waitingConfig{
@@ -21,6 +22,8 @@ var stockOpnameWaiting = waitingConfig{
 			permissions: []string{"execute_stock_opname"},
 		},
 	},
+	extraCondition: stockOpnameBranchDraftCondition,
+	extraCheck:     isStockOpnameBranchDraft,
 }
 
 func applyStockOpnameWaitingFilter(query *gorm.DB, userID string) *gorm.DB {
