@@ -140,6 +140,7 @@ type StockOpnameFlowItemResponse struct {
 	PhotoID         *uint      `json:"photo_id,omitempty"`
 	PhotoURL        *string    `json:"photo_url,omitempty"`
 	PhotoCapturedAt *time.Time `json:"photo_captured_at,omitempty"`
+	PhotoUploadedAt *time.Time `json:"photo_uploaded_at,omitempty"` // acuan photo_submit_max_age_days
 
 	// Dokumen peminjaman (PDF) — wajib diisi kalau FoundPhysicalStatus =
 	// BORROWED, divalidasi juga sebelum submit (lihat SubmitStockOpname)

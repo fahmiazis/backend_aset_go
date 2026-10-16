@@ -1294,9 +1294,12 @@ func buildStockOpnameItemResponse(item stockOpnameItemRow, photo models.StockOpn
 
 	if photo.ID != 0 {
 		resp.PhotoID = &photo.ID
-		url := fmt.Sprintf("/api/v1/transactions/stock-opname/photo/%d/file", photo.ID)
+		// ?v= berubah tiap foto diganti (ID-nya tetap), biar frontend
+		// gak nampilin blob foto lama.
+		url := fmt.Sprintf("/api/v1/transactions/stock-opname/photo/%d/file?v=%d", photo.ID, photo.UpdatedAt.UnixMilli())
 		resp.PhotoURL = &url
 		resp.PhotoCapturedAt = &photo.CapturedAt
+		resp.PhotoUploadedAt = &photo.CreatedAt
 	}
 
 	if borrowDoc.ID != 0 {
@@ -2147,6 +2150,10 @@ func UploadStockOpnameAssetPhoto(userID string, transactionNumber string, assetI
 			"file_hash":   hashHex,
 			"captured_at": capturedAt,
 			"uploaded_by": userID,
+			// Umur foto saat submit dihitung dari created_at (lihat
+			// SubmitStockOpname). Tanpa reset ini, foto pengganti tetap
+			// dianggap basi dan draft gak pernah bisa di-submit.
+			"created_at": time.Now(),
 		}).Error; updateErr != nil {
 			os.Remove(fullPath)
 			return nil, updateErr
